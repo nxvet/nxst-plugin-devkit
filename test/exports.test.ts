@@ -11,15 +11,30 @@ import { describe, it } from 'node:test'
 import { fileURLToPath } from 'node:url'
 
 import type {
+  AckContext,
+  AckVerdict,
+  Capture,
   CaptureEvent,
+  CaptureOptions,
+  CaptureProfile,
+  CaptureStats,
+  CaptureSummary,
   Command,
+  ConnectionModel,
+  Description,
   FieldEdit,
   FixtureOptions,
   FixtureResult,
   FixtureStep,
+  FrameVerdict,
+  Io,
+  Logger,
+  LoggerOptions,
   Message,
   MessageSet,
   MessageState,
+  ParsedCaptureArgs,
+  ParsedSimulatorArgs,
   RawFile,
   RedactionRule,
   RedactionSpec,
@@ -27,6 +42,11 @@ import type {
   Replacement,
   RewriteResult,
   SegmentView,
+  Simulator,
+  SimulatorOptions,
+  SimulatorProfile,
+  SimulatorStats,
+  Summary,
 } from '@nxvet/nxst-plugin-devkit'
 import * as published from '@nxvet/nxst-plugin-devkit'
 
@@ -35,19 +55,28 @@ import * as published from '@nxvet/nxst-plugin-devkit'
  * declared type goes missing from the published declarations.
  */
 const EXPECTED_RUNTIME_EXPORTS = [
+  'UsageError',
+  'allocateOutDir',
   'buildFixture',
+  'createCapture',
+  'createLogger',
   'createRedactor',
+  'createSimulator',
   'describePatientIdOverride',
   'describeState',
   'formatHl7DateTime',
   'formatTable',
   'messagesFromFixture',
   'messagesFromRawFiles',
+  'parseCaptureArgs',
   'parseCommand',
   'parseFixtureSteps',
+  'parseSimulatorArgs',
   'redactChunks',
   'residualCheck',
   'rewriteFields',
+  'runCapture',
+  'runSimulator',
   'splitChunks',
   'validatePatientId',
   'wrapFrame',
@@ -78,10 +107,12 @@ describe('published entry point', () => {
     assert.deepEqual(Object.keys(published).sort(), [...EXPECTED_RUNTIME_EXPORTS].sort())
   })
 
-  it('exposes functions only', () => {
+  it('exposes functions (and one error class) only', () => {
     for (const name of EXPECTED_RUNTIME_EXPORTS) {
       assert.equal(typeof published[name as keyof typeof published], 'function', `${name} should be a function`)
     }
+
+    assert.ok(new published.UsageError('x', 'usage') instanceof Error)
   })
 
   it('resolves to the compiled JavaScript in dist/, not to the TypeScript sources', () => {
@@ -129,6 +160,57 @@ describe('published entry point', () => {
     assert.deepEqual(published.residualCheck([first.bytes], redactor), [])
     assert.equal(published.redactChunks([first.bytes], redactor).length, 1)
   })
+
+  it('exposes the simulator and capture entry points with their option types', () => {
+    const model: ConnectionModel = { kind: 'persistent', retryMs: 0 }
+    const profile: SimulatorProfile = {
+      name: 'Demo',
+      prompt: 'demo> ',
+      rootDir: fileURLToPath(packageRoot),
+      defaults: { port: 5000, ackTimeoutMs: 1000, chunkBytes: 0, gapMs: 0 },
+      connection: model,
+      menuColumns: ['id'],
+      describe: (): Description => ({ controlId: 'CTRL-1', cells: ['CTRL-1'], summary: 'demo', ackExpected: true }),
+      resend: (bytes): RewriteResult => ({ bytes: Buffer.from(bytes), applied: [], skipped: [] }),
+      fresh: (bytes): RewriteResult => ({ bytes: Buffer.from(bytes), applied: [], skipped: [] }),
+      setPatientId: (bytes): RewriteResult => ({ bytes: Buffer.from(bytes), applied: [], skipped: [] }),
+      evaluateAck: (): AckVerdict => ({ code: 'AA', ok: true, notes: [], warnings: [] }),
+    }
+    const parsed: ParsedSimulatorArgs = published.parseSimulatorArgs(profile, ['--help'])
+    const captureProfile: CaptureProfile = {
+      name: 'Demo',
+      rootDir: fileURLToPath(packageRoot),
+      defaults: { port: 5000 },
+      redaction: [],
+      ackCodes: ['AA'],
+      onFrame: (): FrameVerdict => ({ controlId: 'CTRL-1', summary: 'demo', ack: { code: 'AA', text: '' } }),
+      buildAck: (_frame, _verdict, context: AckContext) => `MSH|^~\\&|R||D||20250310104500||ACK|${context.sequence}|P|2.4\rMSA|${context.code}|CTRL-1\r`,
+    }
+    const parsedCapture: ParsedCaptureArgs = published.parseCaptureArgs(captureProfile, ['--help'])
+    const io: Io = { stdout: process.stdout, stderr: process.stderr, isTTY: false }
+    const logger: Logger = published.createLogger(io, {} satisfies LoggerOptions)
+    const options: SimulatorOptions | undefined = undefined
+    const captureOptions: CaptureOptions | undefined = undefined
+    const stats: SimulatorStats | undefined = undefined
+    const captureStats: CaptureStats | undefined = undefined
+    const summary: Summary | undefined = undefined
+    const captureSummary: CaptureSummary | undefined = undefined
+    const simulator: Simulator | undefined = undefined
+    const capture: Capture | undefined = undefined
+
+    assert.equal(parsed.kind, 'help')
+    assert.equal(parsedCapture.kind, 'help')
+    assert.equal(typeof logger.say, 'function')
+    assert.equal(typeof published.allocateOutDir, 'function')
+    assert.equal(options, undefined)
+    assert.equal(captureOptions, undefined)
+    assert.equal(stats, undefined)
+    assert.equal(captureStats, undefined)
+    assert.equal(summary, undefined)
+    assert.equal(captureSummary, undefined)
+    assert.equal(simulator, undefined)
+    assert.equal(capture, undefined)
+  })
 })
 
 describe('package.json', () => {
@@ -150,8 +232,8 @@ describe('package.json', () => {
     }
   })
 
-  it('ships the changelog and the license', () => {
-    for (const file of ['CHANGELOG.md', 'LICENSE']) {
+  it('ships the documentation, the changelog and the license', () => {
+    for (const file of ['README.md', 'README.zh.md', 'CHANGELOG.md', 'LICENSE']) {
       assert.equal(packageJson.files.includes(file), true, `${file} should be in "files"`)
       assert.equal(existsSync(new URL(file, packageRoot)), true, `${file} should exist`)
     }
