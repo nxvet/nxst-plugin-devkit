@@ -1,0 +1,66 @@
+{
+  "name": "@nxvet/nxst-plugin-devkit",
+  "version": "1.0.0",
+  "description": "Development-time toolkit for NxVet SyncTool device plugins: an instrument simulator that drives a real SyncTool with captured bytes, and a live-capture server that records a real analyzer and turns the session into a replay fixture. Instrument semantics stay in the plugin and are supplied through a profile.",
+  "type": "module",
+  "license": "Apache-2.0",
+  "private": false,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nxvet/nxst-plugin-devkit.git"
+  },
+  "bugs": {
+    "url": "https://github.com/nxvet/nxst-plugin-devkit/issues"
+  },
+  "homepage": "https://github.com/nxvet/nxst-plugin-devkit#readme",
+  "publishConfig": {
+    "access": "public"
+  },
+  "sideEffects": false,
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "README.zh.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "prepack": "npm run build",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "check-public": "node scripts/check-public.mjs",
+    "pretest": "npm run build && npm run typecheck && npm run check-public",
+    "test": "node --test 'test/**/*.test.ts'"
+  },
+  "peerDependencies": {
+    "@nxvet/nxst-hl7-parser": "^1.1.0"
+  },
+  "devDependencies": {
+    "@nxvet/nxst-hl7-parser": "^1.1.0",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.9.3"
+  },
+  "keywords": [
+    "nxvet",
+    "synctool",
+    "hl7",
+    "mllp",
+    "simulator",
+    "capture",
+    "fixture",
+    "veterinary",
+    "laboratory",
+    "devkit"
+  ]
+}

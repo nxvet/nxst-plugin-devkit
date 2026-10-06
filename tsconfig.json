@@ -1,0 +1,24 @@
+{
+  // Type-checks both the sources and the tests; emits nothing.
+  //
+  // Sources import each other with `.ts` extensions so that `node --test` can run them
+  // directly through Node's type stripping. The settings below keep the code within what
+  // type stripping accepts (no enums, namespaces or parameter properties; type-only
+  // imports marked with `import type`).
+  "compilerOptions": {
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "target": "es2023",
+    "lib": ["es2023"],
+    "types": ["node"],
+    "strict": true,
+    "noEmit": true,
+    "rewriteRelativeImportExtensions": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "erasableSyntaxOnly": true,
+    "skipLibCheck": false,
+    "forceConsistentCasingInFileNames": true
+  },
+  "include": ["src", "test"]
+}

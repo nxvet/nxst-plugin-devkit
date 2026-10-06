@@ -1,0 +1,78 @@
+name: release
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: write # gh release create
+  id-token: write # npm --provenance (Sigstore signing) and trusted publishing (OIDC)
+
+concurrency: release-${{ github.ref }}
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          registry-url: https://registry.npmjs.org
+          cache: npm
+      # Pinned to the npm 11 line rather than `latest`: trusted publishing needs npm >= 11.5.1, and
+      # a new npm major can drop support for the Node version in .nvmrc (npm 12 requires Node
+      # ^22.22.2 and refuses to install on 22.18).
+      - name: Update npm (trusted publishing needs >= 11.5.1)
+        run: npm install -g npm@11
+      # The tag must name exactly the version in package.json.
+      - name: Guard tag/version
+        run: |
+          PKG="$(node -p "require('./package.json').version")"
+          TAG="${GITHUB_REF_NAME#v}"
+          [ "$PKG" = "$TAG" ] || { echo "tag $TAG != package.json $PKG"; exit 1; }
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
+      # Install the tarball that will actually be published and import it by name, to catch
+      # mistakes in the files list or the exports map.
+      - name: Smoke-test the packed tarball
+        run: |
+          npm pack
+          npm install --prefix "$RUNNER_TEMP/smoke" "$PWD"/nxvet-nxst-plugin-devkit-*.tgz
+          cd "$RUNNER_TEMP/smoke"
+          node -e "import('@nxvet/nxst-plugin-devkit').then((m) => { const names = Object.keys(m).sort(); console.log(names.join('\n')); if (names.length === 0) process.exit(1) })"
+      # npm never lets a version be published twice. When this exact version is already on the
+      # registry (a first release published by hand before trusted publishing could be configured,
+      # or a re-run after a later step failed), skip the publish step so the GitHub Release is
+      # still created. The per-version endpoint is queried because it becomes visible before the
+      # full package document does.
+      - name: Check whether this version is already on npm
+        id: registry
+        run: |
+          NAME="$(node -p "require('./package.json').name")"
+          VERSION="${GITHUB_REF_NAME#v}"
+          if curl -fsS -o /dev/null "https://registry.npmjs.org/${NAME/\//%2f}/${VERSION}"; then
+            echo "published=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::${NAME}@${VERSION} is already on npm; skipping npm publish"
+          else
+            echo "published=false" >> "$GITHUB_OUTPUT"
+          fi
+      # Prereleases (v1.2.3-rc.0 and the like) go to the rc dist-tag; releases go to latest.
+      - name: Publish to npm
+        if: steps.registry.outputs.published != 'true'
+        run: |
+          case "${GITHUB_REF_NAME#v}" in
+            *-*) npm publish --provenance --access public --tag rc ;;
+            *)   npm publish --provenance --access public ;;
+          esac
+        # Authentication uses npm trusted publishing (OIDC): no long-lived token is stored.
+        # It needs id-token: write (see permissions above) and npm >= 11.5.1.
+      # Prereleases are marked as such so they do not take over "Latest release" on the repo page.
+      - name: Create GitHub Release with tarball
+        run: |
+          case "${GITHUB_REF_NAME#v}" in
+            *-*) gh release create "$GITHUB_REF_NAME" nxvet-nxst-plugin-devkit-*.tgz --generate-notes --verify-tag --prerelease ;;
+            *)   gh release create "$GITHUB_REF_NAME" nxvet-nxst-plugin-devkit-*.tgz --generate-notes --verify-tag ;;
+          esac
+        env:
+          GH_TOKEN: ${{ github.token }}

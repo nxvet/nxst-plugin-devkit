@@ -1,0 +1,26 @@
+{
+  // Emits the published package: `dist/*.js` plus `dist/*.d.ts`.
+  //
+  // Node refuses to strip types from `.ts` files under `node_modules`, so consumers must
+  // receive compiled JavaScript. `rewriteRelativeImportExtensions` turns the `.ts` import
+  // specifiers in `src/` into `.js` in the output.
+  "compilerOptions": {
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "target": "es2023",
+    "lib": ["es2023"],
+    "types": ["node"],
+    "strict": true,
+    "rootDir": "src",
+    "outDir": "dist",
+    "declaration": true,
+    "sourceMap": false,
+    "rewriteRelativeImportExtensions": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "erasableSyntaxOnly": true,
+    "skipLibCheck": false,
+    "forceConsistentCasingInFileNames": true
+  },
+  "include": ["src"]
+}

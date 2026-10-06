@@ -1,0 +1,30 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      # npm test also runs pretest (build + typecheck + check-public) before the node:test suite.
+      - run: npm test
+      # Install the packed tarball into a clean directory and import it by name, to catch
+      # mistakes in the files list, the exports map or the .ts -> .js import rewrite.
+      - name: Smoke-test the packed tarball
+        run: |
+          npm pack
+          npm install --prefix "$RUNNER_TEMP/smoke" "$PWD"/nxvet-nxst-plugin-devkit-*.tgz @nxvet/nxst-hl7-parser
+          cd "$RUNNER_TEMP/smoke"
+          node -e "import('@nxvet/nxst-plugin-devkit').then((m) => { const names = Object.keys(m).sort(); console.log(names.join('\n')); if (names.length === 0) process.exit(1) })"
