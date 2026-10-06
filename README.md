@@ -213,7 +213,10 @@ import { field, findSegment, parseMessage } from '@nxvet/nxst-hl7-parser'
 
 import { buildAck, parseResult } from '../src/protocol.ts'
 
-const profile: CaptureProfile = {
+// The plugin's own MSA-1 codes. The type parameter makes `buildAck` receive one of these, not a string.
+type AckCode = 'AA' | 'AE'
+
+const profile: CaptureProfile<AckCode> = {
   name: 'Demo analyzer',
   rootDir: path.resolve(import.meta.dirname, '..'),
   defaults: { port: 5100 },
@@ -224,7 +227,7 @@ const profile: CaptureProfile = {
   ],
   ackCodes: ['AA', 'AE'],
 
-  onFrame(frame, receivedAt, say): FrameVerdict {
+  onFrame(frame, receivedAt, say): FrameVerdict<AckCode> {
     const text = Buffer.from(frame).toString('utf-8')
     const controlId = field(findSegment(parseMessage(text), 'MSH'), 10).trim()
     const outcome = parseResult(text)

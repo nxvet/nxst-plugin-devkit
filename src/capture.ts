@@ -30,8 +30,11 @@ import { createRedactor } from './redact.ts'
 // Profile
 // ---------------------------------------------------------------------------------------------
 
-/** What the plugin made of one captured frame. */
-export interface FrameVerdict {
+/**
+ * What the plugin made of one captured frame. `Code` is the plugin's own type for MSA-1 codes
+ * (for example `'AA' | 'AE'`), so that `buildAck` gets a value of that type back.
+ */
+export interface FrameVerdict<Code extends string = string> {
   /** The message control id (MSH-10), used for resend detection and in the log. Empty when absent. */
   controlId: string
   /** One line describing the outcome (would upload N items, skipped and why); never personal data. */
@@ -39,21 +42,25 @@ export interface FrameVerdict {
   /** A hash of the payload the plugin would upload, so a resend can be compared; omit when nothing would be uploaded. */
   payloadHash?: string
   /** The ACK the plugin would send, or `null` when it would not answer this message at all. */
-  ack: { code: string, text: string } | null
+  ack: { code: Code, text: string } | null
   /** Optional key/value facts to count across the capture and print in the summary. */
   tally?: Record<string, string>
 }
 
-export interface AckContext {
+export interface AckContext<Code extends string = string> {
   /** Sequence number of this ACK within the capture (1-based), for ACKs that carry their own id. */
   sequence: number
-  /** The MSA-1 code to send: the plugin's own, or the one forced by `--ack-code`. */
-  code: string
+  /** The MSA-1 code to send: the plugin's own, or the one forced by `--ack-code` (always one of `ackCodes`). */
+  code: Code
   /** The profile's own switches that were given on the command line. */
   switches: ReadonlySet<string>
 }
 
-export interface CaptureProfile {
+/**
+ * The instrument semantics of the capture tool. `Code` is the plugin's type for MSA-1 codes; the
+ * default `string` keeps the profile easy to write when the plugin does not care.
+ */
+export interface CaptureProfile<Code extends string = string> {
   /** Display name of the analyzer; also written into the fixture header. */
   name: string
   /** The plugin directory: default output goes under `captures/`. */
@@ -62,7 +69,7 @@ export interface CaptureProfile {
   /** Which fields of the captured messages hold personal data, for the fixture. */
   redaction: RedactionSpec
   /** The MSA-1 codes `--ack-code` may force. */
-  ackCodes: readonly string[]
+  ackCodes: readonly Code[]
   /** Extra command-line switches the profile understands (flag to help text), passed to `buildAck`. */
   switches?: Record<string, string>
   /**
@@ -70,9 +77,9 @@ export interface CaptureProfile {
    * about it (the real values of fields the documentation leaves open, for example). Must not
    * print personal data.
    */
-  onFrame(frame: Uint8Array, receivedAt: Date, say: (line: string) => void): FrameVerdict
+  onFrame(frame: Uint8Array, receivedAt: Date, say: (line: string) => void): FrameVerdict<Code>
   /** Builds the ACK text (without MLLP framing) for a frame whose verdict asked for one. */
-  buildAck(frame: Uint8Array, verdict: FrameVerdict, context: AckContext): string
+  buildAck(frame: Uint8Array, verdict: FrameVerdict<Code>, context: AckContext<Code>): string
 }
 
 /** The options `createCapture` runs with (see `parseCaptureArgs` for the command-line form). */
@@ -83,7 +90,7 @@ export interface CaptureOptions {
   outDir: string
   /** False = never answer. */
   sendAck: boolean
-  /** Forces this MSA-1 code on every ACK the plugin would send. */
+  /** Forces this MSA-1 code on every ACK the plugin would send. Comes from the command line, so it is a plain string; `parseCaptureArgs` checks it against `ackCodes`. */
   ackCode: string | undefined
   /** Delay between receiving a message and answering it. */
   ackDelayMs: number
@@ -208,8 +215,11 @@ const lanAddresses = (): string[] => Object.entries(os.networkInterfaces())
     .filter((entry) => entry.family === 'IPv4' && entry.internal === false)
     .map((entry) => `${entry.address} (${name})`))
 
-export const createCapture = (profile: CaptureProfile, options: CaptureOptions, io: Io): Capture => {
+export const createCapture = <Code extends string>(profile: CaptureProfile<Code>, options: CaptureOptions, io: Io): Capture => {
   const clock = (): Date => io.now?.() ?? new Date()
+  // `--ack-code` arrives as text; `parseCaptureArgs` only accepts a value listed in `ackCodes`,
+  // so narrowing it to the profile's own code type is safe here.
+  const forcedCode = options.ackCode as Code | undefined
   const nowMs = (): number => clock().getTime()
   const logger = createLogger(io)
   const { say } = logger
@@ -258,7 +268,7 @@ export const createCapture = (profile: CaptureProfile, options: CaptureOptions, 
     ...(conn.pendingAcks === 0 ? [] : [`! ${conn.pendingAcks} ACK(s) not yet sent`]),
   ].join(', ')
 
-  const scheduleAck = (conn: Connection, frame: number, raw: Buffer, verdict: FrameVerdict, receivedAt: number): void => {
+  const scheduleAck = (conn: Connection, frame: number, raw: Buffer, verdict: FrameVerdict<Code>, receivedAt: number): void => {
     if (verdict.ack === null) {
       stats.noAckByProfile += 1
       say('  no ACK: the plugin would not answer this message')
@@ -273,7 +283,7 @@ export const createCapture = (profile: CaptureProfile, options: CaptureOptions, 
       return
     }
 
-    const code = options.ackCode ?? own.code
+    const code: Code = forcedCode ?? own.code
 
     conn.pendingAcks += 1
     conn.ackQueue = conn.ackQueue.then(async () => {
@@ -577,7 +587,7 @@ export const createCapture = (profile: CaptureProfile, options: CaptureOptions, 
  * writes the fixture and exits. Exit codes: 0 on a normal stop; 1 when the port could not be
  * bound or when interrupted twice; 2 usage error.
  */
-export const runCapture = async (profile: CaptureProfile, argv: readonly string[] = process.argv.slice(2)): Promise<never> => {
+export const runCapture = async <Code extends string>(profile: CaptureProfile<Code>, argv: readonly string[] = process.argv.slice(2)): Promise<never> => {
   const io: Io = { stdout: process.stdout, stderr: process.stderr, isTTY: process.stdout.isTTY === true }
 
   let parsed: ParsedCaptureArgs

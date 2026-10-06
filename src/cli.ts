@@ -269,7 +269,7 @@ export type ParsedCaptureArgs =
   | { kind: 'help', usage: string }
   | { kind: 'run', options: CaptureOptions, usage: string }
 
-const captureUsage = (profile: CaptureProfile): string => {
+const captureUsage = (profile: CaptureProfile<string>): string => {
   const extra = Object.entries(profile.switches ?? {}).map(([flag, help]) => `  ${flag.padEnd(20)} ${help}`)
 
   return [
@@ -291,7 +291,7 @@ const captureUsage = (profile: CaptureProfile): string => {
 }
 
 /** Parses the capture tool's command line. Throws `UsageError` on a problem; never exits. */
-export const parseCaptureArgs = (profile: CaptureProfile, argv: readonly string[], now: Date = new Date()): ParsedCaptureArgs => {
+export const parseCaptureArgs = <Code extends string>(profile: CaptureProfile<Code>, argv: readonly string[], now: Date = new Date()): ParsedCaptureArgs => {
   const usage = captureUsage(profile)
   const switches = new Set(['--no-ack', '--close-after-ack', '--no-redact', ...Object.keys(profile.switches ?? {})])
   const raw = splitArgs(argv, new Set(['--port', '--out', '--ack-code', '--ack-delay']), switches, usage)
@@ -300,8 +300,10 @@ export const parseCaptureArgs = (profile: CaptureProfile, argv: readonly string[
 
   const sendAck = raw.switches.has('--no-ack') === false
   const ackCode = raw.values.get('--ack-code')
+  // The command-line value is checked against the profile's codes here; `createCapture` relies on that.
+  const allowedCodes: readonly string[] = profile.ackCodes
 
-  if (ackCode !== undefined && profile.ackCodes.includes(ackCode) === false) {
+  if (ackCode !== undefined && allowedCodes.includes(ackCode) === false) {
     throw new UsageError(`--ack-code must be one of ${profile.ackCodes.join(', ')}, got ${JSON.stringify(ackCode)}`, usage)
   }
 
