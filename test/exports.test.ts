@@ -66,8 +66,10 @@ const EXPECTED_RUNTIME_EXPORTS = [
   'describeState',
   'formatHl7DateTime',
   'formatTable',
+  'letteredLabel',
   'messagesFromFixture',
   'messagesFromRawFiles',
+  'numberedLabel',
   'parseCaptureArgs',
   'parseCommand',
   'parseFixtureSteps',
@@ -78,6 +80,7 @@ const EXPECTED_RUNTIME_EXPORTS = [
   'runCapture',
   'runSimulator',
   'splitChunks',
+  'spreadsheetLetters',
   'validatePatientId',
   'wrapFrame',
 ]
@@ -159,6 +162,7 @@ describe('published entry point', () => {
     assert.match(published.describePatientIdOverride(undefined), /none/)
     assert.deepEqual(published.residualCheck([first.bytes], redactor), [])
     assert.equal(published.redactChunks([first.bytes], redactor).length, 1)
+    assert.deepEqual([published.spreadsheetLetters(27), published.numberedLabel('ID-', 4)(12), published.letteredLabel('Pet')(2)], ['AA', 'ID-0012', 'PetB'])
   })
 
   it('exposes the simulator and capture entry points with their option types', () => {

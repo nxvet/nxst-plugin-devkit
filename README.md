@@ -208,7 +208,7 @@ A plugin's `tools/live-capture.ts` builds a `CaptureProfile` and hands it to `ru
 import path from 'node:path'
 
 import type { CaptureProfile, FrameVerdict } from '@nxvet/nxst-plugin-devkit'
-import { runCapture } from '@nxvet/nxst-plugin-devkit'
+import { letteredLabel, numberedLabel, runCapture } from '@nxvet/nxst-plugin-devkit'
 import { field, findSegment, parseMessage } from '@nxvet/nxst-hl7-parser'
 
 import { buildAck, parseResult } from '../src/protocol.ts'
@@ -222,8 +222,8 @@ const profile: CaptureProfile<AckCode> = {
   defaults: { port: 5100 },
   // Which fields hold personal data; the same original always gets the same placeholder.
   redaction: [
-    { kind: 'patientId', segment: 'PID', field: 3, component: 1, everyRepetition: true, label: (n) => `TEST-${String(n).padStart(4, '0')}` },
-    { kind: 'petName', segment: 'PID', field: 5, label: (n) => `TestPet${n}` },
+    { kind: 'patientId', segment: 'PID', field: 3, component: 1, everyRepetition: true, label: numberedLabel('TEST-', 4) },
+    { kind: 'petName', segment: 'PID', field: 5, label: letteredLabel('TestPet') },
   ],
   ackCodes: ['AA', 'AE'],
 
@@ -295,6 +295,8 @@ These helpers are what the two tools are built from and can be used on their own
 | `messagesFromRawFiles(files)` | messages from `raw-NNN.hl7` files, sorted by their number |
 | `buildFixture(events, options)` | capture events to a fixture, chunk boundaries preserved; connections that overlapped are replayed one after another and the header says so |
 | `createRedactor(spec)` | a redactor for the configured fields (`segment`, `field`, optional `component`, `everyRepetition`, a `when` predicate for generic segments such as OBX); the same original always gets the same placeholder |
+| `numberedLabel(prefix, digits)`, `letteredLabel(prefix)` | ready-made `label` functions for redaction rules: `numberedLabel('TEST-', 4)` gives `TEST-0001`, `TEST-0002`, ... (a wider number simply grows) and `letteredLabel('TestPet')` gives `TestPetA` ... `TestPetZ`, `TestPetAA`, ...; they keep no state, so the same n always gives the same placeholder |
+| `spreadsheetLetters(n)` | the letter sequence behind `letteredLabel`: spreadsheet column names (`A` ... `Z`, `AA` ... `ZZ`, `AAA`, ...), so it never runs out |
 | `redactChunks(chunks, redactor)` | redacts a connection's chunks without moving a boundary into the middle of a value |
 | `residualCheck(streams, redactor)` | warnings for originals that survived in fields the spec does not cover; an original equal to a placeholder (as when an already-redacted fixture is captured again) is skipped, since its hits cannot be told apart from the placeholder |
 | `rewriteFields(bytes, edits)` | byte-exact edits of fields, repetitions or components; a missing field is reported, never synthesised |

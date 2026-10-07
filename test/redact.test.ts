@@ -4,7 +4,7 @@ import { describe, it } from 'node:test'
 import { component, extractMllpFrames, field, findSegment, findSegments, parseMessage } from '@nxvet/nxst-hl7-parser'
 
 import type { RedactionRule, Redactor } from '../src/redact.ts'
-import { createRedactor, redactChunks, residualCheck } from '../src/redact.ts'
+import { createRedactor, letteredLabel, numberedLabel, redactChunks, residualCheck, spreadsheetLetters } from '../src/redact.ts'
 import { fragments, frame, message } from './support.ts'
 
 const patientId: RedactionRule = { kind: 'patientId', segment: 'PID', field: 3, component: 1, everyRepetition: true, label: (n) => `TEST-${String(n).padStart(4, '0')}` }
@@ -300,5 +300,90 @@ describe('residualCheck', () => {
 
     assert.deepEqual(residualCheck([Buffer.from(out)], redactor), [])
     assert.equal(residualCheck([Buffer.from(out)], wrapped).length, 4)
+  })
+})
+
+describe('label helpers', () => {
+  it('spreadsheetLetters names the n-th spreadsheet column', () => {
+    const cases: Array<[number, string]> = [
+      [1, 'A'], [2, 'B'], [26, 'Z'], [27, 'AA'], [52, 'AZ'], [53, 'BA'], [702, 'ZZ'], [703, 'AAA'], [18278, 'ZZZ'], [18279, 'AAAA'],
+      [Number.MAX_SAFE_INTEGER, 'BKTXHSOGHKKE'],
+    ]
+
+    for (const [n, letters] of cases) assert.equal(spreadsheetLetters(n), letters, `n = ${n}`)
+  })
+
+  it('spreadsheetLetters gives every name of up to three letters exactly once', () => {
+    // There are 26 + 26^2 + 26^3 = 18278 such names, so 18278 distinct results of that shape are all of them.
+    const names = Array.from({ length: 18278 }, (_, index) => spreadsheetLetters(index + 1))
+
+    assert.equal(new Set(names).size, 18278)
+    assert.equal(names.every((name) => /^[A-Z]{1,3}$/.test(name)), true)
+  })
+
+  it('spreadsheetLetters rejects anything but a positive safe integer', () => {
+    for (const n of [0, -1, 1.5, NaN, Infinity, -Infinity, Number.MAX_SAFE_INTEGER + 1]) {
+      assert.throws(() => spreadsheetLetters(n), { name: 'RangeError', message: /n must be a positive safe integer/ }, `n = ${n}`)
+    }
+
+    assert.throws(() => spreadsheetLetters(1.5), { message: 'spreadsheetLetters: n must be a positive safe integer, got 1.5' })
+  })
+
+  it('numberedLabel pads n to the given width and lets a wider number grow', () => {
+    assert.deepEqual([1, 12, 9999, 10000].map(numberedLabel('TEST-', 4)), ['TEST-0001', 'TEST-0012', 'TEST-9999', 'TEST-10000'])
+    assert.deepEqual([1, 12].map(numberedLabel('X-', 1)), ['X-1', 'X-12'])
+  })
+
+  it('numberedLabel checks digits when the label is built and n when it is called', () => {
+    for (const digits of [0, -1, 1.5, NaN, Infinity]) {
+      assert.throws(() => numberedLabel('X-', digits), { name: 'RangeError', message: /digits must be a positive safe integer/ }, `digits = ${digits}`)
+    }
+
+    const label = numberedLabel('X-', 4)
+
+    for (const n of [0, -1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1]) {
+      assert.throws(() => label(n), { name: 'RangeError', message: /n must be a positive safe integer/ }, `n = ${n}`)
+    }
+  })
+
+  it('letteredLabel appends the spreadsheet letters of n to the prefix', () => {
+    assert.deepEqual([1, 2, 26, 27].map(letteredLabel('Name')), ['NameA', 'NameB', 'NameZ', 'NameAA'])
+    assert.throws(() => letteredLabel('Name')(0), { name: 'RangeError', message: /n must be a positive safe integer, got 0/ })
+  })
+
+  it('gives the same placeholder for the same n, whatever was asked before', () => {
+    const numbered = numberedLabel('ID-', 4)
+    const lettered = letteredLabel('Name')
+    const order = [5, 1, 5, 28, 1]
+
+    assert.deepEqual(order.map(numbered), ['ID-0005', 'ID-0001', 'ID-0005', 'ID-0028', 'ID-0001'])
+    assert.deepEqual(order.map(lettered), ['NameE', 'NameA', 'NameE', 'NameAB', 'NameA'])
+    assert.deepEqual(order.map(numberedLabel('ID-', 4)), order.map(numbered))
+  })
+
+  it('builds labels createRedactor accepts, with the placeholders the hand-written labels give', () => {
+    const spec: RedactionRule[] = [{ ...patientId, label: numberedLabel('TEST-', 4) }, { ...petName, label: letteredLabel('TestPet') }, owner, vet]
+    const text = message(originals)
+    const out = createRedactor(spec).redactText(text)
+
+    assert.equal(out, createRedactor(SPEC).redactText(text))
+    assert.equal(field(pidOf(out), 3), 'TEST-0001^^^^^Demo Clinic')
+    assert.equal(field(pidOf(out), 5), 'TestPetA')
+  })
+
+  it('keeps lettering placeholders past Z through createRedactor', () => {
+    const redactor = createRedactor([{ ...petName, label: letteredLabel('TestPet') }])
+    const names = Array.from({ length: 28 }, (_, index) => field(pidOf(redactor.redactText(message({ petName: `Zorblax ${index + 1}` }))), 5))
+
+    assert.deepEqual([names[0], names[25], names[26], names[27]], ['TestPetA', 'TestPetZ', 'TestPetAA', 'TestPetAB'])
+    assert.equal(new Set(names).size, 28)
+  })
+
+  it('leaves the prefix to createRedactor, which rejects a placeholder with an HL7 delimiter', () => {
+    const label = numberedLabel('A|', 4)
+
+    assert.equal(label(1), 'A|0001')
+    assert.throws(() => createRedactor([{ kind: 'a', segment: 'PID', field: 3, label }]), /delimiter or a line break/)
+    assert.throws(() => createRedactor([{ kind: 'a', segment: 'PID', field: 3, label: letteredLabel('A^') }]), /delimiter or a line break/)
   })
 })

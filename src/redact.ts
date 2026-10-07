@@ -58,6 +58,58 @@ export interface RedactionRule {
 
 export type RedactionSpec = readonly RedactionRule[]
 
+/** Throws a RangeError unless `value` is an integer from 1 to `Number.MAX_SAFE_INTEGER`. */
+const requirePositiveInteger = (name: string, value: number): void => {
+  if (Number.isSafeInteger(value) === false || value < 1) throw new RangeError(`${name} must be a positive safe integer, got ${value}`)
+}
+
+/**
+ * The n-th spreadsheet column name: 1 → `A`, 26 → `Z`, 27 → `AA`, 702 → `ZZ`, 703 → `AAA`. This is
+ * bijective base 26, so the sequence never runs out and no two numbers share a name. Meant for
+ * `RedactionRule.label`, usually through `letteredLabel`; it keeps no state, so the same n always
+ * gives the same letters. Throws a RangeError when n is not a positive safe integer.
+ */
+export const spreadsheetLetters = (n: number): string => {
+  requirePositiveInteger('spreadsheetLetters: n', n)
+
+  let out = ''
+  let rest = n
+
+  while (rest > 0) {
+    out = String.fromCharCode(65 + ((rest - 1) % 26)) + out
+    rest = Math.floor((rest - 1) / 26)
+  }
+
+  return out
+}
+
+/**
+ * Builds a `RedactionRule.label` that numbers placeholders: `numberedLabel('ID-', 4)` gives
+ * `ID-0001`, `ID-0002`, ...; a number wider than `digits` simply grows (`ID-10000`). The label keeps
+ * no state, so the same n always gives the same placeholder. `digits` is checked here and n when
+ * the label is called: each must be a positive safe integer, or a RangeError is thrown. The prefix
+ * is not checked; `createRedactor` rejects a placeholder that contains an HL7 delimiter or a line
+ * break.
+ */
+export const numberedLabel = (prefix: string, digits: number): ((n: number) => string) => {
+  requirePositiveInteger('numberedLabel: digits', digits)
+
+  return (n) => {
+    requirePositiveInteger('numberedLabel: n', n)
+
+    return prefix + String(n).padStart(digits, '0')
+  }
+}
+
+/**
+ * Builds a `RedactionRule.label` that letters placeholders: `letteredLabel('Name')` gives `NameA`,
+ * `NameB`, ... `NameZ`, `NameAA` (the prefix followed by `spreadsheetLetters(n)`, so the sequence
+ * never runs out). The label keeps no state, so the same n always gives the same placeholder; n
+ * must be a positive safe integer, or a RangeError is thrown. The prefix is not checked;
+ * `createRedactor` rejects a placeholder that contains an HL7 delimiter or a line break.
+ */
+export const letteredLabel = (prefix: string): ((n: number) => string) => (n) => prefix + spreadsheetLetters(n)
+
 /**
  * One replacement found by a redactor: the bytes in `[start, end)` are replaced with `value`. It
  * has the shape of the parser's `RangeReplacement`, so it can be passed to `replaceRanges` directly.

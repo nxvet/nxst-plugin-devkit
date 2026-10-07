@@ -5,6 +5,20 @@ All notable changes to `@nxvet/nxst-plugin-devkit` are recorded here. The packag
 `CaptureProfile`) and the command-line flags of `runSimulator` / `runCapture` are the public
 contract.
 
+## 1.1.0 — 2026-10-07
+
+### Added
+
+- **Redaction**: three helpers for the `label` of a `RedactionRule`, so a profile no longer writes
+  its own. `numberedLabel(prefix, digits)` numbers placeholders: `numberedLabel('TEST-', 4)` gives
+  `TEST-0001`, `TEST-0002`, ..., and a wider number simply grows (`TEST-10000`).
+  `letteredLabel(prefix)` letters them: `letteredLabel('TestPet')` gives `TestPetA` to `TestPetZ`,
+  then `TestPetAA`. `spreadsheetLetters(n)` is that letter sequence on its own (spreadsheet column
+  names: 1 is `A`, 27 is `AA`, 703 is `AAA`), so it never runs out. The labels keep no state: the
+  same n always gives the same placeholder. A `digits` or n that is not a positive safe integer
+  throws a `RangeError`. Prefixes are not checked; `createRedactor` still rejects a placeholder
+  that contains an HL7 delimiter or a line break.
+
 ## 1.0.1 — 2026-10-07
 
 ### Fixed

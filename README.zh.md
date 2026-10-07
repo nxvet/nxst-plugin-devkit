@@ -92,7 +92,11 @@ npm script 執行時兩者是同一個地方：`npm run simulate -- --source cap
 
 兩支工具底下的純函式也可以單獨用：`parseFixtureSteps`、`messagesFromFixture`、`messagesFromRawFiles`、
 `buildFixture`、`createRedactor`（規則：段落、欄位、成分、每個重複值、針對 OBX 這類通用段落的 `when` 判斷；
-同一原值一律同一代號）、`redactChunks`（跨 chunk 置換且切點不落在值的中間）、`residualCheck`（原值若等於已發出的
+同一原值一律同一代號）、`numberedLabel` 與 `letteredLabel`（現成的規則 `label` 函式：`numberedLabel('TEST-', 4)`
+產生 `TEST-0001`、`TEST-0002`…，數字超過位數就直接變長；`letteredLabel('TestPet')` 產生 `TestPetA`…`TestPetZ`、
+`TestPetAA`…；不留狀態，同一個 n 永遠得到同一個代號）、`spreadsheetLetters`（`letteredLabel` 用的字母序列，
+也就是試算表的欄名 `A`…`Z`、`AA`…`ZZ`、`AAA`…，永遠用不完）、
+`redactChunks`（跨 chunk 置換且切點不落在值的中間）、`residualCheck`（原值若等於已發出的
 任一代號就略過，例如重新擷取已置換過的 fixture 時，兩者分不出來）、
 `rewriteFields`（逐位元組的欄位／重複值／成分改寫，缺的欄位只回報、不合成）、`wrapFrame`、`splitChunks`，
 以及互動模式的純函式 `parseCommand`、`formatTable`、`describeState`、`validatePatientId`。
