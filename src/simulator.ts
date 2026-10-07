@@ -108,7 +108,10 @@ export interface SimulatorOptions {
   port: number
   /** A fixture (`.jsonl`), a directory of `raw-NNN.hl7` files, or one message file. */
   source: string
-  /** Where `sent-NNN.hl7` and `simulate.log` are written. Created on `start()`. */
+  /**
+   * Where `sent-NNN.hl7` and `simulate.log` are written. Created on `start()`, which refuses a
+   * directory that already holds either; a capture's files do not count, so the two tools may share one.
+   */
   outDir: string
   /** Pause between messages sent by one command; `undefined` replays the captured gaps. */
   gapMs: number | undefined
@@ -167,7 +170,11 @@ export interface Summary {
 }
 
 export interface Simulator {
-  /** Creates the output directory, prints the settings (and, on a terminal, the list), connects or starts probing. */
+  /**
+   * Creates the output directory, prints the settings (and, on a terminal, the list), connects or
+   * starts probing. Rejects before connecting or writing anything when the output directory already
+   * holds a simulator run (`sent-NNN.hl7` or `simulate.log`).
+   */
   start(): Promise<void>
   /** Prints the message list with the current state of each message. */
   list(): void
@@ -1005,6 +1012,14 @@ export const createSimulator = (profile: SimulatorProfile, options: SimulatorOpt
 
   const start = async (): Promise<void> => {
     fs.mkdirSync(options.outDir, { recursive: true })
+
+    // Only the simulator's own files count: a capture writing into the same directory is fine.
+    const occupied = fs.readdirSync(options.outDir).some((name) => /^(sent-\d+\.hl7|simulate\.log)$/.test(name))
+
+    if (occupied) {
+      throw new Error(`output directory ${options.outDir} already holds a simulator run; choose another --out so the sent bytes are not overwritten`)
+    }
+
     logger.setLogFile(path.join(options.outDir, 'simulate.log'))
 
     say(`${profile.name} simulator: ${messages.length} message(s) from ${displayPath(profile.rootDir, options.source)} (${sourceKind}); output in ${displayPath(profile.rootDir, options.outDir)}`)
@@ -1218,7 +1233,12 @@ export const runSimulator = async (profile: SimulatorProfile, argv: readonly str
   })
   process.on('SIGTERM', () => { enqueue('q') })
 
-  await simulator.start()
+  try {
+    await simulator.start()
+  } catch (error) {
+    process.stderr.write(`${(error as Error).message}\n`)
+    process.exit(1)
+  }
 
   if (io.isTTY) rl.prompt()
 

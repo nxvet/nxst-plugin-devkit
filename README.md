@@ -172,7 +172,7 @@ something by accident.
 | `--retry <ms>` | `connection.retryMs` | persistent model: reconnect delay after a refused connection or a close by the receiver (0 = never) |
 | `--probe <ms>`, `--pre-send <ms>` | `connection.probeMs`, `connection.preSendMs` | per-message model: idle probe interval (0 = none) and the delay between connecting and sending |
 | `--hold <s>` | 0 | keep connections open this long after `q` |
-| `--out <dir>` | `<rootDir>/captures/simulate-<date>` | where `sent-NNN.hl7` (the bytes actually sent) and `simulate.log` go; numbered `-2`, `-3` when the day already has results |
+| `--out <dir>` | `<rootDir>/captures/simulate-<date>` | where `sent-NNN.hl7` (the bytes actually sent) and `simulate.log` go; numbered `-2`, `-3` when the day already has results; an explicit directory that already holds `sent-NNN.hl7` or `simulate.log` is refused (exit 1), while a capture's files do not count, so both tools may share one directory |
 | `--list` | – | print the list and exit |
 
 ### Exit codes

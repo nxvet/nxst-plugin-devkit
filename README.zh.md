@@ -60,7 +60,8 @@ profile 要給：顯示名稱、提示符、外掛目錄（預設的來源與輸
 
 旗標：`--host`、`--port`、`--source`（fixture、raw 檔目錄或單一檔）、`--gap <ms>|real`、`--ack-timeout`、
 `--chunk` / `--chunk-gap`、`--patient-id`、`--fresh`、`--retry`（persistent）、`--probe` / `--pre-send`
-（per-message）、`--hold`、`--out`、`--list`。
+（per-message）、`--hold`、`--out`、`--list`。明確指定的 `--out` 目錄裡若已有 `sent-NNN.hl7` 或 `simulate.log`
+（上一次模擬的結果）會直接拒絕（exit 1），不覆寫；擷取工具的檔案不算，所以兩支工具可以共用同一個目錄。
 
 Exit code：0 = 每則都拿到 profile 接受的 ACK；1 = 有逾時、不被接受、連不上或寫入失敗；2 = 參數錯；
 130 = 連按兩次 Ctrl-C。`ackExpected` 為 false 的訊息（driver 本來就不回、或沒有 control id）逾時不算失敗。

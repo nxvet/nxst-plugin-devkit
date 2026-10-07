@@ -1,8 +1,8 @@
 // In-process loopback: a capture (playing the receiver) and a simulator (playing the analyzer)
 // talk over a real TCP port, with synthetic profiles. This pins the mechanics the plugins rely
 // on: the bytes that arrive are the bytes that were sent, ACKs are matched, timeouts never
-// resend, both connection models behave, the exit code reflects the run, and no personal data
-// from the messages reaches the output.
+// resend, both connection models behave, the exit code reflects the run, an earlier run's output
+// is never overwritten, and no personal data from the messages reaches the output.
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
@@ -98,6 +98,8 @@ interface Harness {
   port: number
   capture: ReturnType<typeof createCapture>
   simulator: ReturnType<typeof createSimulator>
+  /** The simulator's output directory (not created until `start()`). */
+  simulatorDir: string
   simulatorOutput: () => string
   captureOutput: () => string
   rawFiles: () => Buffer[]
@@ -187,6 +189,7 @@ const setup = async (
     port,
     capture,
     simulator,
+    simulatorDir,
     simulatorOutput: simulatorOut.text,
     captureOutput: captureOut.text,
     rawFiles: () => files(captureDir, 'raw-'),
@@ -381,5 +384,67 @@ describe('loopback, one connection per message', () => {
     await h.capture.stop()
     assert.equal(h.capture.stats.frames, 1)
     assert.ok(h.simulator.stats.closedByUs + h.simulator.stats.closedWithError >= 1)
+  })
+})
+
+describe('simulator output directory', () => {
+  /** Writes `files` into `dir` (created when missing). */
+  const seed = (dir: string, files: Record<string, Buffer>): void => {
+    mkdirSync(dir, { recursive: true })
+
+    for (const [name, bytes] of Object.entries(files)) writeFileSync(path.join(dir, name), bytes)
+  }
+
+  /** Closes both tools (both calls are idempotent), so that a failing assertion cannot leave a socket open and hang the file. */
+  const closeAll = async (h: Harness): Promise<void> => {
+    await h.simulator.finish()
+    await h.capture.stop()
+  }
+
+  it('refuses a directory that already holds a simulator run, before connecting or writing anything', async (t) => {
+    const h = await setup({ kind: 'persistent', retryMs: 0 })
+    const earlier = {
+      'sent-001.hl7': Buffer.from(message({ controlId: 'CTRL-EARLIER' }), 'utf-8'),
+      'simulate.log': Buffer.from('[2025-03-10 10:45:00.000] an earlier run\n', 'utf-8'),
+    }
+
+    t.after(() => closeAll(h))
+    seed(h.simulatorDir, earlier)
+
+    await assert.rejects(h.simulator.start(), /output directory .+ already holds a simulator run; choose another --out so the sent bytes are not overwritten/)
+    // A connection that should not exist gets time to reach the receiver.
+    await new Promise((resolve) => { setTimeout(resolve, 100) })
+
+    assert.equal(h.simulatorOutput(), '', 'nothing was printed, so nothing was appended to the log')
+    assert.equal(h.simulator.stats.opened, 0)
+    assert.equal(h.capture.stats.connections, 0, 'nothing connected to the receiver')
+    assert.deepEqual(readdirSync(h.simulatorDir).sort(), Object.keys(earlier).sort())
+
+    for (const [name, bytes] of Object.entries(earlier)) assert.deepEqual(readFileSync(path.join(h.simulatorDir, name)), bytes, `${name} is untouched`)
+  })
+
+  it('accepts a directory that holds only a capture\'s files, so both tools can share one', async (t) => {
+    const h = await setup({ kind: 'persistent', retryMs: 0 })
+    const captured = {
+      'raw-001.hl7': Buffer.from(message({ controlId: 'CTRL-CAPTURED' }), 'utf-8'),
+      'capture.log': Buffer.from('[2025-03-10 10:45:00.000] a capture\n', 'utf-8'),
+      'session.jsonl': Buffer.from(fixture(CONNECTION, textLine(message({ controlId: 'CTRL-CAPTURED' }), 0)), 'utf-8'),
+    }
+
+    t.after(() => closeAll(h))
+    seed(h.simulatorDir, captured)
+
+    await h.simulator.start()
+    await h.simulator.run('1')
+    await until(() => h.simulator.stats.matchedOk === 1)
+
+    const summary = await h.simulator.finish()
+
+    await h.capture.stop()
+    assert.equal(summary.ok, true)
+    assert.deepEqual(h.sentFiles(), h.rawFiles(), 'the run itself is unaffected')
+    assert.deepEqual(readdirSync(h.simulatorDir).sort(), [...Object.keys(captured), 'sent-001.hl7', 'simulate.log'].sort())
+
+    for (const [name, bytes] of Object.entries(captured)) assert.deepEqual(readFileSync(path.join(h.simulatorDir, name)), bytes, `${name} is untouched`)
   })
 })
