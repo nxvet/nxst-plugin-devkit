@@ -81,6 +81,13 @@ Exit code：0 = 每則都拿到 profile 接受的 ACK；1 = 有逾時、不被�
 
 重送以 control id 偵測，並比對原始位元組與 `payloadHash`，所以看得出儀器的「再送一次」是不是同一份位元組。
 
+## 路徑
+
+命令列上給的相對路徑（`--source`、`--out`）一律以目前目錄為準，與一般命令列工具相同；預設值則固定在 profile 的
+`rootDir` 底下：`<rootDir>/fixtures/session.jsonl`、`<rootDir>/captures/simulate-<日期>`、
+`<rootDir>/captures/capture-<日期>`。`npm run` 會在套件目錄（對外掛來說就是 `rootDir`）執行 script，所以透過
+npm script 執行時兩者是同一個地方：`npm run simulate -- --source captures/x` 讀的是 `<rootDir>/captures/x`。
+
 ## fixture、個資置換、欄位改寫
 
 兩支工具底下的純函式也可以單獨用：`parseFixtureSteps`、`messagesFromFixture`、`messagesFromRawFiles`、

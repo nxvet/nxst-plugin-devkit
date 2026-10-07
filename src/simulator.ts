@@ -106,7 +106,11 @@ export interface SimulatorProfile {
 export interface SimulatorOptions {
   host: string
   port: number
-  /** A fixture (`.jsonl`), a directory of `raw-NNN.hl7` files, or one message file. */
+  /**
+   * A fixture (`.jsonl`), a directory of `raw-NNN.hl7` files, or one message file. On the command
+   * line a relative path is taken from the current directory; the default is `fixtures/session.jsonl`
+   * under `rootDir`.
+   */
   source: string
   /**
    * Where `sent-NNN.hl7` and `simulate.log` are written. Created on `start()`, which refuses a

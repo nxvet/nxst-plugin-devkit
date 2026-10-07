@@ -197,7 +197,8 @@ const simulatorUsage = (profile: SimulatorProfile): string => {
     '',
     '  --host <ip>          the receiver (default 127.0.0.1)',
     `  --port <n>           the receiver's port (default ${profile.defaults.port})`,
-    '  --source <path>      messages to send (default fixtures/session.jsonl under the plugin directory)',
+    '  --source <path>      messages to send (default fixtures/session.jsonl under the plugin directory;',
+    '                       a relative path is taken from the current directory)',
     `  --gap <ms>|real      pause between messages sent in one command (default ${profile.defaults.gapMs}; real = the captured gaps)`,
     `  --ack-timeout <ms>   how long to wait for an ACK; a timeout is logged, never resent (default ${profile.defaults.ackTimeoutMs})`,
     `  --chunk <bytes>      write each frame in pieces of this size (default ${profile.defaults.chunkBytes}; 0 = one write)`,
@@ -205,7 +206,8 @@ const simulatorUsage = (profile: SimulatorProfile): string => {
     '  --patient-id <id>    initial patient id override (the "id" command changes it later)',
     '  --fresh              renew the control id and timestamp of every message before sending',
     '  --hold <s>           keep connections open this long after "q" before exiting (default 0)',
-    '  --out <dir>          output directory (default captures/simulate-<date> under the plugin directory)',
+    '  --out <dir>          output directory (default captures/simulate-<date> under the plugin directory;',
+    '                       a relative path is taken from the current directory)',
     modelFlags,
     '  --list               print the message list and exit',
     '  --help               this text',
@@ -214,7 +216,8 @@ const simulatorUsage = (profile: SimulatorProfile): string => {
 
 /**
  * Parses the simulator's command line. Throws `UsageError` on a problem; never exits. The clock
- * is only used to name the default output directory.
+ * is only used to name the default output directory. A relative `--source` or `--out` is taken from
+ * the current directory; the defaults are under `profile.rootDir`.
  */
 export const parseSimulatorArgs = (profile: SimulatorProfile, argv: readonly string[], now: Date = new Date()): ParsedSimulatorArgs => {
   const usage = simulatorUsage(profile)
@@ -238,12 +241,13 @@ export const parseSimulatorArgs = (profile: SimulatorProfile, argv: readonly str
   }
 
   const gap = get('--gap') ?? String(profile.defaults.gapMs)
+  const sourceArg = get('--source')
   const outArg = get('--out')
 
   const options: SimulatorOptions = {
     host: get('--host') ?? '127.0.0.1',
     port: integer('--port', get('--port') ?? String(profile.defaults.port), 1, 65535, usage),
-    source: path.resolve(profile.rootDir, get('--source') ?? path.join('fixtures', 'session.jsonl')),
+    source: sourceArg === undefined ? path.resolve(profile.rootDir, 'fixtures', 'session.jsonl') : path.resolve(sourceArg),
     outDir: outArg === undefined ? allocateOutDir(path.join(profile.rootDir, 'captures'), 'simulate', now) : path.resolve(outArg),
     gapMs: gap === 'real' ? undefined : integer('--gap', gap, 0, MAX_TIMER_MS, usage),
     ackTimeoutMs: integer('--ack-timeout', get('--ack-timeout') ?? String(profile.defaults.ackTimeoutMs), 1, MAX_TIMER_MS, usage),
@@ -279,7 +283,8 @@ const captureUsage = (profile: CaptureProfile<string>): string => {
     `${profile.name} capture: listens like the receiver, records every byte the analyzer sends, answers with the plugin's ACK.`,
     '',
     `  --port <n>           port to listen on (default ${profile.defaults.port})`,
-    '  --out <dir>          output directory (default captures/capture-<date> under the plugin directory)',
+    '  --out <dir>          output directory (default captures/capture-<date> under the plugin directory;',
+    '                       a relative path is taken from the current directory)',
     '  --no-ack             never answer (what does the analyzer do without an ACK?)',
     `  --ack-code <code>    answer with this MSA-1 code instead of the plugin\'s (${profile.ackCodes.join(', ')})`,
     '  --ack-delay <ms>     answer this long after the message arrived (probe the analyzer\'s ACK timeout)',
@@ -290,7 +295,10 @@ const captureUsage = (profile: CaptureProfile<string>): string => {
   ].join('\n')
 }
 
-/** Parses the capture tool's command line. Throws `UsageError` on a problem; never exits. */
+/**
+ * Parses the capture tool's command line. Throws `UsageError` on a problem; never exits. A relative
+ * `--out` is taken from the current directory; the default is under `profile.rootDir`.
+ */
 export const parseCaptureArgs = <Code extends string>(profile: CaptureProfile<Code>, argv: readonly string[], now: Date = new Date()): ParsedCaptureArgs => {
   const usage = captureUsage(profile)
   const switches = new Set(['--no-ack', '--close-after-ack', '--no-redact', ...Object.keys(profile.switches ?? {})])

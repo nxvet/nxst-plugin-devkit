@@ -112,7 +112,7 @@ describe('parseSimulatorArgs', () => {
     assert.equal(parsed.list, true)
     assert.equal(parsed.options.host, '10.1.2.3')
     assert.equal(parsed.options.port, 6000)
-    assert.equal(parsed.options.source, path.join(ROOT, 'captures', 'x'))
+    assert.equal(parsed.options.source, path.resolve('captures/x'))
     assert.equal(parsed.options.gapMs, undefined)
     assert.equal(parsed.options.ackTimeoutMs, 500)
     assert.equal(parsed.options.chunkBytes, 0)
@@ -222,6 +222,29 @@ describe('usage text', () => {
 
     assert.equal(defaultOutIn(simulator.usage).replace('<date>', localDate(DATE)), underRoot(simulator.options.outDir))
     assert.equal(defaultOutIn(capture.usage).replace('<date>', localDate(DATE)), underRoot(capture.options.outDir))
+  })
+})
+
+describe('command-line paths', () => {
+  it('takes a relative --source or --out from the current directory, while the defaults stay under the plugin directory', () => {
+    const elsewhere = path.join(os.tmpdir(), 'elsewhere', 'session.jsonl')
+    const sources = [[], ['--source', 'fixtures/session.jsonl'], ['--source', elsewhere]]
+      .map((argv) => parseSimulatorArgs(PERSISTENT, argv, DATE))
+      .map((parsed) => (parsed.kind === 'run' ? parsed.options.source : undefined))
+    const outDirs = [
+      parseSimulatorArgs(PERSISTENT, [], DATE),
+      parseSimulatorArgs(PERSISTENT, ['--out', 'captures/x'], DATE),
+      parseCaptureArgs(captureProfile, [], DATE),
+      parseCaptureArgs(captureProfile, ['--out', 'captures/x'], DATE),
+    ].map((parsed) => (parsed.kind === 'run' ? parsed.options.outDir : undefined))
+
+    assert.deepEqual(sources, [path.join(ROOT, 'fixtures', 'session.jsonl'), path.join(process.cwd(), 'fixtures', 'session.jsonl'), elsewhere])
+    assert.deepEqual(outDirs, [
+      path.join(ROOT, 'captures', 'simulate-2025-03-10'),
+      path.join(process.cwd(), 'captures', 'x'),
+      path.join(ROOT, 'captures', 'capture-2025-03-10'),
+      path.join(process.cwd(), 'captures', 'x'),
+    ])
   })
 })
 

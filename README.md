@@ -163,7 +163,7 @@ something by accident.
 | Flag | Default | Meaning |
 |---|---|---|
 | `--host`, `--port` | `127.0.0.1`, `profile.defaults.port` | the receiver |
-| `--source` | `<rootDir>/fixtures/session.jsonl` | a replay fixture, a directory of `raw-NNN.hl7` files, or one message file |
+| `--source` | `<rootDir>/fixtures/session.jsonl` | a replay fixture, a directory of `raw-NNN.hl7` files, or one message file; a relative path is taken from the current directory (see *Paths* below) |
 | `--gap <ms>` / `--gap real` | `profile.defaults.gapMs` | pause between messages sent by one command; `real` replays the captured gaps |
 | `--ack-timeout <ms>` | `profile.defaults.ackTimeoutMs` | how long to wait for an ACK; a timeout is logged and never resent |
 | `--chunk <bytes>`, `--chunk-gap <ms>` | `profile.defaults.chunkBytes`, 10 | write each frame in pieces (the way TCP may split it); whether the receiver sees separate chunks depends on the network |
@@ -270,6 +270,17 @@ personal data redacted.
 
 Resends are detected by control id and compared by raw bytes and by `payloadHash`, so a run shows
 whether the analyzer's "send again" produces identical bytes or new ones.
+
+---
+
+## Paths
+
+A relative path given on the command line (`--source`, `--out`) is taken from the current
+directory, as with any other command-line tool. The defaults are anchored to the profile's
+`rootDir` instead: `<rootDir>/fixtures/session.jsonl`, `<rootDir>/captures/simulate-<date>` and
+`<rootDir>/captures/capture-<date>`. `npm run` starts a script in the package directory, which for a
+plugin is `rootDir`, so through an npm script both mean the same place:
+`npm run simulate -- --source captures/x` reads `<rootDir>/captures/x`.
 
 ---
 
