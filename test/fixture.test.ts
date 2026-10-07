@@ -372,6 +372,22 @@ describe('buildFixture', () => {
     assert.match(result.text, /\/\/ WARNING: a "petName" original/)
   })
 
+  it('does not warn about originals that are placeholders, as when a redacted fixture is captured again in another order', () => {
+    const first = message({ controlId: 'A', patientId: 'TEST-0001', petName: 'TestPetA', owner: 'TEST-OWNER-1', vet: 'TestVet' })
+    const second = message({ controlId: 'B', patientId: 'TEST-0002', petName: 'TestPetB', owner: 'TEST-OWNER-2', vet: 'TestVet' })
+    const events: CaptureEvent[] = [
+      { kind: 'connection', connection: 1, atMs: 0 },
+      { kind: 'data', connection: 1, atMs: 10, bytes: frame(second) },
+      { kind: 'data', connection: 1, atMs: 20, bytes: frame(first) },
+    ]
+    const result = buildFixture(events, { ...options, redactor: createRedactor(SPEC) })
+    const pids = messagesFromFixture(result.text).messages.map((entry) => field(findSegment(parseMessage(entry.bytes.toString('utf-8')), 'PID'), 3))
+
+    assert.deepEqual(pids, ['TEST-0001^^^^^Demo Clinic', 'TEST-0002^^^^^Demo Clinic'], 'renumbered in the order of arrival')
+    assert.deepEqual(result.warnings, [])
+    assert.equal(result.text.includes('// WARNING: a "'), false)
+  })
+
   it('handles an empty event list', () => {
     const result = buildFixture([], options)
 

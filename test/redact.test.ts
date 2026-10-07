@@ -3,7 +3,7 @@ import { describe, it } from 'node:test'
 
 import { component, extractMllpFrames, field, findSegment, findSegments, parseMessage } from '@nxvet/nxst-hl7-parser'
 
-import type { RedactionRule } from '../src/redact.ts'
+import type { RedactionRule, Redactor } from '../src/redact.ts'
 import { createRedactor, redactChunks, residualCheck } from '../src/redact.ts'
 import { fragments, frame, message } from './support.ts'
 
@@ -260,5 +260,45 @@ describe('residualCheck', () => {
     assert.deepEqual(residualCheck([Buffer.from(out)], redactor), [])
     assert.deepEqual(residualCheck([Buffer.from(`${out}A1A1`)], redactor), [])
     assert.equal(residualCheck([Buffer.from(`${out}A1A1`)], redactor, 2).length, 1)
+  })
+
+  it('skips originals that are placeholders themselves, as when an already-redacted message is redacted again', () => {
+    const redacted = createRedactor(SPEC).redactText(message(originals))
+    const redactor = createRedactor(SPEC)
+    const out = redactor.redactText(redacted)
+
+    assert.equal(out, redacted, 'every placeholder maps to itself')
+    assert.deepEqual(redactor.originals().map((entry) => entry.value), ['TEST-0001', 'TestPetA', 'TEST-OWNER-1', 'TestVet'])
+    assert.deepEqual(residualCheck([Buffer.from(out)], redactor), [])
+  })
+
+  it('skips an original that equals the placeholder of another one, as when only some redacted messages are sent, or in another order', () => {
+    for (const ids of [['TEST-0002', 'TEST-0003'], ['TEST-0002', 'TEST-0001']]) {
+      const redactor = createRedactor(SPEC)
+      const out = ids.map((id) => redactor.redactText(message({ patientId: id, petName: 'TestPetA', owner: 'TEST-OWNER-1', vet: 'TestVet' })))
+
+      assert.deepEqual(out.map((text) => component(field(pidOf(text), 3), 1)), ['TEST-0001', 'TEST-0002'], `${ids.join(', ')}: renumbered from 1`)
+      assert.deepEqual(residualCheck([Buffer.from(out.join(''))], redactor), [], ids.join(', '))
+    }
+  })
+
+  it('still reports a real original that survived next to originals that are placeholders', () => {
+    const redactor = createRedactor(SPEC)
+    const obx = ['OBX|1|ST|X009^NOTE^DEMO||Mizzleton Fluffington||||||F']
+    const out = redactor.redactText(message({ patientId: 'TEST-0002', petName: 'Mizzleton Fluffington', owner: 'TEST-OWNER-1', vet: 'TestVet', obx }))
+    const warnings = residualCheck([Buffer.from(out)], redactor)
+
+    assert.equal(warnings.length, 1)
+    assert.match(warnings[0], /"petName" original \(21 bytes\) still appears 1 time\(s\)/)
+    assert.equal(warnings[0].includes('Mizzleton'), false)
+  })
+
+  it('checks every original of a redactor that createRedactor did not make, since its placeholders are unknown', () => {
+    const redactor = createRedactor(SPEC)
+    const out = redactor.redactText(createRedactor(SPEC).redactText(message(originals)))
+    const wrapped: Redactor = { ...redactor }
+
+    assert.deepEqual(residualCheck([Buffer.from(out)], redactor), [])
+    assert.equal(residualCheck([Buffer.from(out)], wrapped).length, 4)
   })
 })

@@ -283,7 +283,7 @@ These helpers are what the two tools are built from and can be used on their own
 | `buildFixture(events, options)` | capture events to a fixture, chunk boundaries preserved; connections that overlapped are replayed one after another and the header says so |
 | `createRedactor(spec)` | a redactor for the configured fields (`segment`, `field`, optional `component`, `everyRepetition`, a `when` predicate for generic segments such as OBX); the same original always gets the same placeholder |
 | `redactChunks(chunks, redactor)` | redacts a connection's chunks without moving a boundary into the middle of a value |
-| `residualCheck(streams, redactor)` | warnings for originals that survived in fields the spec does not cover |
+| `residualCheck(streams, redactor)` | warnings for originals that survived in fields the spec does not cover; an original equal to a placeholder (as when an already-redacted fixture is captured again) is skipped, since its hits cannot be told apart from the placeholder |
 | `rewriteFields(bytes, edits)` | byte-exact edits of fields, repetitions or components; a missing field is reported, never synthesised |
 | `wrapFrame(bytes)`, `splitChunks(bytes, size)` | MLLP framing without decoding; fixed-size pieces |
 | `parseCommand(line)`, `formatTable`, `describeState`, `validatePatientId` | the pure half of the interactive mode |

@@ -84,7 +84,8 @@ Exit code：0 = 每則都拿到 profile 接受的 ACK；1 = 有逾時、不被�
 
 兩支工具底下的純函式也可以單獨用：`parseFixtureSteps`、`messagesFromFixture`、`messagesFromRawFiles`、
 `buildFixture`、`createRedactor`（規則：段落、欄位、成分、每個重複值、針對 OBX 這類通用段落的 `when` 判斷；
-同一原值一律同一代號）、`redactChunks`（跨 chunk 置換且切點不落在值的中間）、`residualCheck`、
+同一原值一律同一代號）、`redactChunks`（跨 chunk 置換且切點不落在值的中間）、`residualCheck`（原值若等於已發出的
+任一代號就略過，例如重新擷取已置換過的 fixture 時，兩者分不出來）、
 `rewriteFields`（逐位元組的欄位／重複值／成分改寫，缺的欄位只回報、不合成）、`wrapFrame`、`splitChunks`，
 以及互動模式的純函式 `parseCommand`、`formatTable`、`describeState`、`validatePatientId`。
 

@@ -96,6 +96,12 @@ const FORBIDDEN_IN_LABEL = /[|^~\\&\r\n]/
 const asBuffer = (bytes: Uint8Array): Buffer => Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength)
 
 /**
+ * The placeholders issued so far, of every kind, by each redactor `createRedactor` made. Kept out of
+ * the `Redactor` interface; only `residualCheck` reads it.
+ */
+const issuedPlaceholders = new WeakMap<Redactor, () => Set<string>>()
+
+/**
  * Checks the placeholders a spec produces, so that a bad `label` is caught when the redactor is
  * created rather than when a capture is written: no delimiters or line breaks, never empty, and
  * two kinds never produce the same placeholder (the fixture could not be read back unambiguously).
@@ -222,7 +228,7 @@ export const createRedactor = (spec: RedactionSpec): Redactor => {
     return replaceRanges(bytes, findInMessage(bytes)).bytes.toString('utf-8')
   }
 
-  return {
+  const redactor: Redactor = {
     kinds,
     findInStream,
     findInMessage,
@@ -230,6 +236,10 @@ export const createRedactor = (spec: RedactionSpec): Redactor => {
     counts: () => Object.fromEntries(kinds.map((kind) => [kind, (maps.get(kind) as Map<string, string>).size])),
     originals: () => kinds.flatMap((kind) => [...(maps.get(kind) as Map<string, string>).keys()].map((value) => ({ kind, value }))),
   }
+
+  issuedPlaceholders.set(redactor, () => new Set([...maps.values()].flatMap((map) => [...map.values()])))
+
+  return redactor
 }
 
 /**
@@ -263,17 +273,23 @@ export const redactChunks = (chunks: readonly Uint8Array[], redactor: Redactor):
 /**
  * Looks for originals that survived redaction, for example in a field the spec does not cover or
  * in bytes outside any frame. Originals shorter than `minBytes` are skipped (a short numeric id is
- * too likely to appear in a result value by coincidence). The returned warnings never contain an
- * original value.
+ * too likely to appear in a result value by coincidence). So is an original equal to any
+ * placeholder the redactor has issued, of any kind, because its hits cannot be told apart from that
+ * placeholder: when an already-redacted fixture is captured again, its `TEST-0001` maps to
+ * `TEST-0001`, or to `TEST-0002` when only some messages are sent or they arrive in another order,
+ * while `TEST-0001` is the placeholder of another value. (Placeholders are known only for a
+ * redactor made by `createRedactor`; for any other redactor every original is checked.) The
+ * returned warnings never contain an original value.
  */
 export const residualCheck = (streams: readonly Uint8Array[], redactor: Redactor, minBytes = 4): string[] => {
   const everything = Buffer.concat(streams.map(asBuffer))
+  const placeholders = issuedPlaceholders.get(redactor)?.() ?? new Set<string>()
   const warnings: string[] = []
 
   for (const { kind, value } of redactor.originals()) {
     const needle = Buffer.from(value, 'utf-8')
 
-    if (needle.length < minBytes) continue
+    if (needle.length < minBytes || placeholders.has(value)) continue
 
     let hits = 0
     let at = everything.indexOf(needle)
