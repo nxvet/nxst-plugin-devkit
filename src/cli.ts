@@ -279,7 +279,7 @@ const captureUsage = (profile: CaptureProfile<string>): string => {
     `${profile.name} capture: listens like the receiver, records every byte the analyzer sends, answers with the plugin's ACK.`,
     '',
     `  --port <n>           port to listen on (default ${profile.defaults.port})`,
-    '  --out <dir>          output directory (default captures/<date> under the plugin directory)',
+    '  --out <dir>          output directory (default captures/capture-<date> under the plugin directory)',
     '  --no-ack             never answer (what does the analyzer do without an ACK?)',
     `  --ack-code <code>    answer with this MSA-1 code instead of the plugin\'s (${profile.ackCodes.join(', ')})`,
     '  --ack-delay <ms>     answer this long after the message arrived (probe the analyzer\'s ACK timeout)',

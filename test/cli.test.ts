@@ -7,7 +7,7 @@ import { PassThrough } from 'node:stream'
 import { describe, it } from 'node:test'
 
 import type { CaptureProfile } from '../src/capture.ts'
-import { UsageError, allocateOutDir, createLogger, parseCaptureArgs, parseSimulatorArgs } from '../src/cli.ts'
+import { UsageError, allocateOutDir, createLogger, localDate, parseCaptureArgs, parseSimulatorArgs } from '../src/cli.ts'
 import type { ConnectionModel, SimulatorProfile } from '../src/simulator.ts'
 
 const ROOT = path.join(os.tmpdir(), 'devkit-cli-root')
@@ -44,6 +44,19 @@ const captureProfile: CaptureProfile = {
 const usageError = (run: () => unknown, pattern: RegExp): void => {
   assert.throws(run, (error: unknown) => error instanceof UsageError && pattern.test(error.message) && error.usage.includes('Usage:'))
 }
+
+/** The default output directory the `--out` line of a usage text names, `<date>` included. */
+const defaultOutIn = (usage: string): string => {
+  const line = usage.split('\n').find((entry) => entry.trimStart().startsWith('--out <dir>')) ?? ''
+  const matched = /\(default (\S+<date>)/.exec(line)
+
+  assert.ok(matched !== null, `the --out line names its default: ${JSON.stringify(line)}`)
+
+  return matched[1]
+}
+
+/** `outDir` relative to `ROOT`, with forward slashes, as the usage text writes it. */
+const underRoot = (outDir: string): string => path.relative(ROOT, outDir).split(path.sep).join('/')
 
 describe('parseSimulatorArgs', () => {
   it('fills the defaults from the profile for a persistent-connection analyzer', () => {
@@ -194,6 +207,21 @@ describe('parseCaptureArgs', () => {
     assert.match(parsed.usage, /Usage: live-capture/)
     assert.match(parsed.usage, /--swap-header\s+swap the sender/)
     assert.match(parsed.usage, /\(AA, AE\)/)
+  })
+})
+
+describe('usage text', () => {
+  it('names the default output directory of both tools exactly as it is allocated', () => {
+    const simulator = parseSimulatorArgs(PERSISTENT, [], DATE)
+    const capture = parseCaptureArgs(captureProfile, [], DATE)
+
+    assert.equal(simulator.kind, 'run')
+    assert.equal(capture.kind, 'run')
+
+    if (simulator.kind !== 'run' || capture.kind !== 'run') return
+
+    assert.equal(defaultOutIn(simulator.usage).replace('<date>', localDate(DATE)), underRoot(simulator.options.outDir))
+    assert.equal(defaultOutIn(capture.usage).replace('<date>', localDate(DATE)), underRoot(capture.options.outDir))
   })
 })
 
