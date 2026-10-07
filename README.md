@@ -250,10 +250,12 @@ void runCapture(profile)
 ```
 
 `node tools/live-capture.ts` listens on the plugin's port, prints the machine's addresses to type
-into the analyzer, and for every frame writes `raw-NNN.hl7` (the exact bytes), logs the connection
-timing (when the analyzer opened, sent, closed; how long after the ACK) and prints what the plugin
-made of it. Stopping the tool (Ctrl-C) writes `session.jsonl`, a fixture for the SDK's replay
-harness with every chunk boundary preserved and personal data redacted.
+into the analyzer and the settings of the run (how it will answer, and which of the profile's own
+switches were given, so that `capture.log` records them too), and for every frame writes
+`raw-NNN.hl7` (the exact bytes), logs the connection timing (when the analyzer opened, sent, closed;
+how long after the ACK) and prints what the plugin made of it. Stopping the tool (Ctrl-C) writes
+`session.jsonl`, a fixture for the SDK's replay harness with every chunk boundary preserved and
+personal data redacted.
 
 | Flag | Meaning |
 |---|---|

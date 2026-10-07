@@ -448,3 +448,59 @@ describe('simulator output directory', () => {
     for (const [name, bytes] of Object.entries(captured)) assert.deepEqual(readFileSync(path.join(h.simulatorDir, name)), bytes, `${name} is untouched`)
   })
 })
+
+describe('capture start-up', () => {
+  const SWITCHES = {
+    '--swap-header': 'swap the sender and receiver fields of the ACK header',
+    '--short-ack': 'leave the optional fields of the ACK empty',
+    '--legacy-ack': 'answer with the older ACK layout',
+  }
+
+  /** The lines without their timestamps. */
+  const unstamped = (text: string): string[] => text.split('\n').map((line) => line.replace(/^\[[^\]]+\] /, ''))
+
+  /** Starts and stops a capture; returns the lines it printed and the lines of its capture.log. */
+  const startAndStop = async (switches: Record<string, string> | undefined, given: string[]): Promise<{ printed: string[], logged: string[] }> => {
+    const root = mkdtempSync(path.join(os.tmpdir(), 'devkit-start-'))
+    const outDir = path.join(root, 'captures', 'capture')
+    const out = collect()
+    const capture = createCapture({ ...captureProfile(root), switches }, {
+      port: 0,
+      outDir,
+      sendAck: true,
+      ackCode: undefined,
+      ackDelayMs: 0,
+      closeAfterAck: false,
+      redact: true,
+      switches: new Set(given),
+    }, { stdout: out.stream, stderr: out.stream, isTTY: false })
+
+    await capture.listen()
+    await capture.stop()
+
+    return { printed: unstamped(out.text()), logged: unstamped(readFileSync(path.join(outDir, 'capture.log'), 'utf-8')) }
+  }
+
+  /** The line printed right after the `ACK: ...` settings line. */
+  const afterAck = (lines: string[]): string | undefined => lines[lines.findIndex((line) => line.startsWith('ACK: ')) + 1]
+
+  it('prints the profile switches that were given, in declaration order, right after the ACK settings and in capture.log', async () => {
+    const { printed, logged } = await startAndStop(SWITCHES, ['--legacy-ack', '--swap-header'])
+
+    assert.equal(afterAck(printed), 'Profile switches: --swap-header, --legacy-ack')
+    assert.equal(afterAck(logged), 'Profile switches: --swap-header, --legacy-ack')
+  })
+
+  it('lists the available switches when none was given, and prints no such line when the profile declares none', async () => {
+    const { printed, logged } = await startAndStop(SWITCHES, [])
+
+    assert.equal(afterAck(printed), 'Profile switches: none given (available: --swap-header, --short-ack, --legacy-ack)')
+    assert.equal(afterAck(logged), 'Profile switches: none given (available: --swap-header, --short-ack, --legacy-ack)')
+
+    for (const switches of [undefined, {}]) {
+      const plain = await startAndStop(switches, [])
+
+      assert.equal([...plain.printed, ...plain.logged].some((line) => line.startsWith('Profile switches')), false, JSON.stringify(switches))
+    }
+  })
+})

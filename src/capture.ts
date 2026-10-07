@@ -503,6 +503,15 @@ export const createCapture = <Code extends string>(profile: CaptureProfile<Code>
         ? `${options.ackCode === undefined ? "the plugin's own" : `MSA-1 forced to ${options.ackCode}`}${options.ackDelayMs > 0 ? `, ${options.ackDelayMs} ms after each frame` : ''}${options.closeAfterAck ? ', then close' : ''}`
         : 'never (--no-ack)'}; fixture: ${options.redact ? 'redacted' : '! NOT redacted (--no-redact): do not commit it'}; output in ${displayPath(profile.rootDir, options.outDir)}`)
 
+      // The profile's own switches change the ACK too, so the log must show which were given.
+      const declared = Object.keys(profile.switches ?? {})
+
+      if (declared.length > 0) {
+        const given = declared.filter((flag) => options.switches.has(flag))
+
+        say(`Profile switches: ${given.length > 0 ? given.join(', ') : `none given (available: ${declared.join(', ')})`}`)
+      }
+
       if (isInside(path.join(profile.rootDir, 'captures'), options.outDir) === false) {
         say('! the output directory is not under captures/ of the plugin: raw-NNN.hl7 holds personal data; make sure it is not committed')
       }
