@@ -286,7 +286,7 @@ const captureUsage = (profile: CaptureProfile<string>): string => {
     '  --out <dir>          output directory (default captures/capture-<date> under the plugin directory;',
     '                       a relative path is taken from the current directory)',
     '  --no-ack             never answer (what does the analyzer do without an ACK?)',
-    `  --ack-code <code>    answer with this MSA-1 code instead of the plugin\'s (${profile.ackCodes.join(', ')})`,
+    `  --ack-code <code>    answer with this MSA-1 code instead of the plugin\'s (${profile.ackCodes.join(', ')}; case-insensitive)`,
     '  --ack-delay <ms>     answer this long after the message arrived (probe the analyzer\'s ACK timeout)',
     '  --close-after-ack    close the connection right after the ACK',
     '  --no-redact          write the fixture without redaction (local debugging only; never commit it)',
@@ -307,12 +307,14 @@ export const parseCaptureArgs = <Code extends string>(profile: CaptureProfile<Co
   if (raw.help) return { kind: 'help', usage }
 
   const sendAck = raw.switches.has('--no-ack') === false
-  const ackCode = raw.values.get('--ack-code')
-  // The command-line value is checked against the profile's codes here; `createCapture` relies on that.
+  const ackArg = raw.values.get('--ack-code')
+  // The command-line value is checked against the profile's codes here, ignoring case, and passed on
+  // in the profile's own spelling; `createCapture` relies on that.
   const allowedCodes: readonly string[] = profile.ackCodes
+  const ackCode = ackArg === undefined ? undefined : allowedCodes.find((code) => code.toUpperCase() === ackArg.toUpperCase())
 
-  if (ackCode !== undefined && allowedCodes.includes(ackCode) === false) {
-    throw new UsageError(`--ack-code must be one of ${profile.ackCodes.join(', ')}, got ${JSON.stringify(ackCode)}`, usage)
+  if (ackArg !== undefined && ackCode === undefined) {
+    throw new UsageError(`--ack-code must be one of ${profile.ackCodes.join(', ')}, got ${JSON.stringify(ackArg)}`, usage)
   }
 
   if (sendAck === false) {

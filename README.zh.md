@@ -76,7 +76,7 @@ Exit code：0 = 每則都拿到 profile 接受的 ACK；1 = 有逾時、不被�
 工具 listen 在外掛的 port，啟動時印出這台機器的 IP 供儀器設定，以及這次怎麼回 ACK、給了 profile 自訂旗標中的
 哪幾個（都會寫進 `capture.log`）；每收到一則 frame 就寫 `raw-NNN.hl7`（原始位元組）、
 記連線時序（何時連入、送出、關閉、ACK 後幾毫秒）、印外掛的解析結果；Ctrl-C 結束時寫 `session.jsonl`
-（保留每個 chunk 切點、個資已置換）。旗標：`--port`、`--out`、`--no-ack`、`--ack-code`、`--ack-delay`、
+（保留每個 chunk 切點、個資已置換）。旗標：`--port`、`--out`、`--no-ack`、`--ack-code`（不分大小寫）、`--ack-delay`、
 `--close-after-ack`、`--no-redact`（只供本機除錯，不得 commit）以及 profile 自己宣告的旗標。
 
 重送以 control id 偵測，並比對原始位元組與 `payloadHash`，所以看得出儀器的「再送一次」是不是同一份位元組。

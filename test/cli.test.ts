@@ -206,7 +206,20 @@ describe('parseCaptureArgs', () => {
     assert.equal(parsed.kind, 'help')
     assert.match(parsed.usage, /Usage: live-capture/)
     assert.match(parsed.usage, /--swap-header\s+swap the sender/)
-    assert.match(parsed.usage, /\(AA, AE\)/)
+    assert.match(parsed.usage, /\(AA, AE; case-insensitive\)/)
+  })
+
+  it('matches --ack-code without regard to case and passes it on in the profile\'s own spelling', () => {
+    for (const value of ['ae', 'Ae', 'AE']) {
+      const parsed = parseCaptureArgs(captureProfile, ['--ack-code', value], DATE)
+
+      assert.equal(parsed.kind === 'run' && parsed.options.ackCode, 'AE', value)
+    }
+
+    const lowerCase = parseCaptureArgs({ ...captureProfile, ackCodes: ['AA', 'ae'] }, ['--ack-code', 'AE'], DATE)
+
+    assert.equal(lowerCase.kind === 'run' && lowerCase.options.ackCode, 'ae')
+    usageError(() => parseCaptureArgs(captureProfile, ['--ack-code', 'zz'], DATE), /--ack-code must be one of AA, AE, got "zz"/)
   })
 })
 

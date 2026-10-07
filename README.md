@@ -262,7 +262,7 @@ personal data redacted.
 | `--port <n>` | port to listen on (default `profile.defaults.port`) |
 | `--out <dir>` | output directory (default `<rootDir>/captures/capture-<date>`); refuses to overwrite an earlier capture |
 | `--no-ack` | never answer: what does the analyzer do without an ACK? |
-| `--ack-code <code>` | answer with this MSA-1 code instead of the plugin's (one of `profile.ackCodes`) |
+| `--ack-code <code>` | answer with this MSA-1 code instead of the plugin's (one of `profile.ackCodes`, case-insensitive) |
 | `--ack-delay <ms>` | answer this long after the frame arrived: probe the analyzer's ACK timeout |
 | `--close-after-ack` | close the connection right after each ACK |
 | `--no-redact` | write the fixture without redaction (local debugging only; never commit it) |
