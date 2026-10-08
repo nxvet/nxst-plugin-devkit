@@ -14,10 +14,11 @@ the plugin's port and behaves the way the analyzer did on the wire; the capture 
 image and is how those bytes and habits were recorded in the first place.
 
 - **Instrument semantics stay in the plugin.** Which message is a QC result, how an ACK is judged,
-  which fields a resend renews, which fields hold personal data, how the analyzer uses TCP — all of
-  that is supplied through a *profile* object. The toolkit owns only the mechanics.
+  which fields a resend renews, which fields hold personal data or result values, how the analyzer
+  uses TCP — all of that is supplied through a *profile* object. The toolkit owns only the mechanics.
 - **Byte-exact.** Messages are sent exactly as captured; the few fields a run may change (control
-  id, timestamp, patient id) are edited in place with the byte-range helpers of
+  id, timestamp, patient id, and the result values in random mode) are edited in place with the
+  byte-range helpers of
   [`@nxvet/nxst-hl7-parser`](https://www.npmjs.com/package/@nxvet/nxst-hl7-parser).
 - **No personal data in the output.** Frames are never printed. The list, the log and the summary
   only show what the profile returns, and fixtures are redacted before they are written.
@@ -123,6 +124,9 @@ while idle uses the other connection model:
 connection: { kind: 'per-message', probeMs: 10_000, preSendMs: 300, closeAfterAckMs: 3 },
 ```
 
+A profile may also implement the optional `randomize`, which says where the result values are and
+lets a run replace them with random numbers (see *Random values* below).
+
 Run it with `node tools/simulate.ts` (or an npm script). On a terminal it connects (or starts
 probing), prints the message list and waits for commands:
 
@@ -149,6 +153,7 @@ was acknowledged and accepted.
 | `r` | resend the last message the way the analyzer would (`profile.resend`) |
 | `... id=A123` | apply patient id `A123` to that command only (`3 id=A123`, `s id=A123`, `a id=A123`; not `r`) |
 | `id A123` / `id` / `id -` | set the patient id for every later send / show it / clear it |
+| `rand on` / `rand off` / `rand` | replace the result values of later sends with bounded random numbers / stop / show whether they are on, and the seed (only for a profile with `randomize`; see *Random values*) |
 | `l` | print the list again, with the current status of each message |
 | `n` / `c` / `k` | persistent model only: open another connection, close the current one (FIN), destroy it |
 | `w 500` | wait 500 ms (for piped runs) |
@@ -169,6 +174,8 @@ something by accident.
 | `--chunk <bytes>`, `--chunk-gap <ms>` | `profile.defaults.chunkBytes`, 10 | write each frame in pieces (the way TCP may split it); whether the receiver sees separate chunks depends on the network |
 | `--patient-id <id>` | – | initial value of the patient id override |
 | `--fresh` | off | renew the control id and timestamp of every message (`profile.fresh`), so a receiver that de-duplicates sees new results |
+| `--random` | off | replace every result value with a bounded random number before sending (`profile.randomize`; see *Random values*); only for a profile with `randomize`, otherwise a usage error |
+| `--seed <n>` | a new one, printed at start | the seed of the random values, an integer from 0 to 4294967295: the same seed and the same commands send the same values; accepted without `--random` (it applies once `rand on` is typed); only for a profile with `randomize` |
 | `--retry <ms>` | `connection.retryMs` | persistent model: reconnect delay after a refused connection or a close by the receiver (0 = never) |
 | `--probe <ms>`, `--pre-send <ms>` | `connection.probeMs`, `connection.preSendMs` | per-message model: idle probe interval (0 = none) and the delay between connecting and sending |
 | `--hold <s>` | 0 | keep connections open this long after `q` |
@@ -186,6 +193,94 @@ something by accident.
 
 A message whose `Description.ackExpected` is false (the plugin would not answer it, or it has no
 control id) may time out without failing the run.
+
+### Random values
+
+A capture holds a handful of results, and replaying it sends the same values every time. With
+`--random` (or `rand on` at the prompt) every exam result value of each message sent is replaced
+with a bounded random number first, so one capture yields any number of different, plausible
+results. Which fields hold result values is the plugin's knowledge, so a profile opts in by
+implementing `randomize`:
+
+```ts
+import type { FieldEdit, RewriteResult } from '@nxvet/nxst-plugin-devkit'
+import { rangePosition, rewriteFields } from '@nxvet/nxst-plugin-devkit'
+
+// In the SimulatorProfile. Here the plugin's parser also says which OBX each uploaded item came from
+// (item.obx, 1-based); OBX-5 holds the value and OBX-8 the abnormal flag.
+randomize(bytes, randomValue): RewriteResult {
+  const outcome = parseResult(decode(bytes))
+  const edits: FieldEdit[] = []
+  const skipped: RewriteResult['skipped'] = []
+
+  for (const item of outcome.kind === 'upload' ? outcome.items : []) {
+    const value = randomValue({ name: item.name, value: item.value, low: item.low, high: item.high })
+
+    if (value === undefined) {
+      skipped.push({ name: item.name, reason: 'not a plain number' })
+      continue
+    }
+
+    // The flag follows the new value, judged against the original reference range.
+    const position = rangePosition(value, item.low, item.high)
+
+    edits.push({ name: item.name, segment: 'OBX', occurrence: item.obx, field: 5, value })
+
+    if (position !== undefined) {
+      const flag = { below: 'L', within: 'N', above: 'H' }[position]
+
+      edits.push({ name: `${item.name} flag`, segment: 'OBX', occurrence: item.obx, field: 8, value: flag })
+    }
+  }
+
+  const result = rewriteFields(bytes, edits)
+
+  return { ...result, skipped: [...result.skipped, ...skipped] }
+},
+```
+
+`randomValue` returns the new value as text, or `undefined` when the value is not a plain number;
+such a value stays as it is and goes into `skipped`. Every other byte of the message stays as it
+was. The rules are the toolkit's, the same for every plugin:
+
+- **Plain number**: once trimmed, an optional minus sign, digits, and optionally a dot followed by
+  digits (`98`, `7.074`, `-3`, `0.50`). `<50.0`, `>99`, `/`, `-`, `18.4 *` and an empty value are
+  not.
+- **Range** of the new value (`randomRange`):
+
+  | Reference range | New value | Examples |
+  |---|---|---|
+  | low and high both plain numbers, low ≤ high | from low minus a fifth of the span to high plus a fifth of the span; never below 0 when low ≥ 0 | 7.31 to 7.42 → 7.288 to 7.442; -3 to 3 → -4.2 to 4.2; 0 to 5 → 0 to 6; 4 to 4 → 4 |
+  | none, one bound only, a bound that is not a plain number, or low > high | from 0 to twice the value (from twice the value to 0 when it is negative; 0 to 1 for 0) | 12 → 0 to 24; -1.5 → -3 to 0; 0 → 0 to 1 |
+
+- **Decimals**: as many as the most precise of the value, low and high (counting only plain
+  numbers): a value of 7.074 with a range of 7.31 to 7.42 gets three. Every number on that grid
+  within the range is equally likely, both ends included. Bounds are computed as exact decimals,
+  never in floating point: 7.31 to 7.42 widens to exactly 7.288, not 7.287999999999999.
+- **Seed**: one generator serves the whole run. While random values are on, its seed is printed at
+  start (`random values on (seed 123; --seed 123 repeats them)`), under the list, and by `rand` and
+  `rand on`; `--seed 123` with the same commands sends the same values again. Without `--seed`,
+  every run gets a new seed. `--seed` may be given without `--random`; it then applies once
+  `rand on` is typed.
+- **Resend**: `r` resends the bytes that were sent last, random values included, the way the
+  analyzer resends a result; it never draws new ones.
+- **`rand on` / `rand off` / `rand`**: random values for later sends, the captured values again, or
+  the current state and seed.
+
+Each randomized send logs what was drawn, right under its `sending` line (result values are not
+personal data; nothing else from the message is printed):
+
+```
+→ connection #1: sending #1 as captures/simulate-2026-10-08/sent-001.hl7 (2059 bytes): patient message 1001 for PX-1234
+    random values: GLU 98 → 121 (59.6 to 160.4), PH 7.074 → 7.301 (7.288 to 7.442); left as they were: CRP (not a plain number)
+```
+
+Every randomized send carries different values, so a receiver that de-duplicates by content takes
+it as a new result even without `--fresh` (the control id and timestamp stay as in the source unless
+`--fresh` renews them). To send the same result again, use `r`; for the captured values, `rand off`.
+
+A profile without `randomize` behaves exactly as before: `--random` and `--seed` are usage errors
+that say why, and `rand` answers that random values are not available.
 
 ### What the toolkit does and does not do
 
@@ -284,7 +379,7 @@ plugin is `rootDir`, so through an npm script both mean the same place:
 
 ---
 
-## Fixtures, redaction and field edits
+## Fixtures, redaction, field edits and random values
 
 These helpers are what the two tools are built from and can be used on their own.
 
@@ -299,8 +394,12 @@ These helpers are what the two tools are built from and can be used on their own
 | `spreadsheetLetters(n)` | the letter sequence behind `letteredLabel`: spreadsheet column names (`A` ... `Z`, `AA` ... `ZZ`, `AAA`, ...), so it never runs out |
 | `redactChunks(chunks, redactor)` | redacts a connection's chunks without moving a boundary into the middle of a value |
 | `residualCheck(streams, redactor)` | warnings for originals that survived in fields the spec does not cover; an original equal to a placeholder (as when an already-redacted fixture is captured again) is skipped, since its hits cannot be told apart from the placeholder |
-| `rewriteFields(bytes, edits)` | byte-exact edits of fields, repetitions or components; a missing field is reported, never synthesised |
+| `rewriteFields(bytes, edits)` | byte-exact edits of fields, repetitions or components; `occurrence` picks the nth segment with that name (`{ segment: 'OBX', occurrence: 3, field: 5 }` is OBX-5 of the third OBX; default the first); a missing segment, occurrence or field is reported, never synthesised |
 | `wrapFrame(bytes)`, `splitChunks(bytes, size)` | MLLP framing without decoding; fixed-size pieces |
+| `randomRange(input)` | the range and the decimals a new value for a result is drawn from (see *Random values*), or `undefined` when the value is not a plain number |
+| `createRandomValue(random, onPick?)` | the `RandomValue` handed to `randomize`: draws from `randomRange` with any generator of numbers from 0 up to 1 (`Math.random`, `seededRandom(n)`); `onPick` sees each value produced |
+| `seededRandom(seed)` | a repeatable generator (mulberry32); the seed is an integer from 0 to 4294967295, anything else throws a `RangeError` |
+| `rangePosition(value, low, high)` | `below`, `within` or `above` a reference range (ends included, compared exactly), or `undefined` when one of them is not a plain number or low > high; for recomputing a flag once a value was replaced |
 | `parseCommand(line)`, `formatTable`, `describeState`, `validatePatientId` | the pure half of the interactive mode |
 
 ---
@@ -310,9 +409,10 @@ These helpers are what the two tools are built from and can be used on their own
 The toolkit never prints frame contents and never writes them anywhere but the raw and sent files,
 which belong under the plugin's `captures/` directory (keep it ignored by version control; both
 tools warn when `--out` points elsewhere). Everything printed about a message comes from the
-profile: `Description.cells` and `summary`, `FrameVerdict.summary`, the lines `onFrame` prints.
-**A profile must not put names, owners or other personal data into those strings.** Patient ids are
-the plugin's own decision (the drivers log them).
+profile: `Description.cells` and `summary`, `FrameVerdict.summary`, the lines `onFrame` prints, and
+in random mode the names and values `randomize` passes to `randomValue` and the `skipped` entries it
+returns. **A profile must not put names, owners or other personal data into those strings.**
+Patient ids are the plugin's own decision (the drivers log them).
 
 Fixtures written by the capture tool are redacted with the profile's `RedactionSpec`, every other
 byte unchanged, and the header lists how many distinct values were replaced per kind. Review a
@@ -338,6 +438,11 @@ port, then run `printf 'a\nw 1000\nq\n' | node tools/simulate.ts --port <that po
 must be acknowledged, and the simulator must exit with 0. The capture's `--no-ack`, `--ack-code`
 and `--ack-delay` then let you check how the simulator (and the real analyzer's habits it encodes)
 react to a misbehaving receiver.
+
+A profile's `randomize` can be tested without a network or a simulator: call it with a stub
+`RandomValue` (for example `() => '1.00'`, or one that records the inputs it is given) to check which
+values it reads and which bytes it rewrites, or with `createRandomValue(seededRandom(1))` for
+repeatable values that stay within `randomRange`.
 
 The interactive mode is best checked by hand in a terminal: the list appears on start, typing a
 number sends that message, the prompt is redrawn when an ACK arrives, and Ctrl-C prints the summary.

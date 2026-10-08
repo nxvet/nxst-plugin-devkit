@@ -5,6 +5,41 @@ All notable changes to `@nxvet/nxst-plugin-devkit` are recorded here. The packag
 `CaptureProfile`) and the command-line flags of `runSimulator` / `runCapture` are the public
 contract.
 
+## 1.2.0 — Unreleased
+
+### Added
+
+- **Simulator**: random result values. With `--random`, or `rand on` at the prompt, every exam
+  result value of each message sent is first replaced with a bounded random number, so one capture
+  yields any number of different results. A profile opts in with the new optional
+  `SimulatorProfile.randomize(bytes, randomValue)`: it asks `randomValue({ name, value, low, high })`
+  for each value the plugin would upload, writes the new value in place, brings whatever the analyzer
+  derives from it (an abnormal flag) in line, and reports in `skipped` the values it left alone. A
+  value that is not a plain number (`<50.0`, `>99`, `/`, `-`, `18.4 *`, empty) is left as it is.
+  The new value is drawn from the reference range widened by a fifth of its span on each side, never
+  below 0 when low is not negative (7.31 to 7.42 gives 7.288 to 7.442, 0 to 5 gives 0 to 6), or from
+  0 to twice the value when there is no usable range (0 to 1 for 0), with as many decimals as the
+  most precise of value, low and high. One seeded generator serves the run; while random values are
+  on its seed is printed at start, under the list and by `rand on`, and `--seed <n>` sends the same
+  values again for the same commands. `r` resends the values that were sent, as the analyzer does.
+  Each randomized send logs the values drawn with their ranges, and the ones left as they were;
+  `rand` shows the state and the seed, `rand off` goes back to the captured values. `--random`,
+  `--seed` and the `rand` commands are only available for a profile that implements `randomize`
+  (otherwise the flags are a usage error that says why); a profile without it behaves exactly as
+  before. Because each randomized send carries new values, a receiver that de-duplicates by content
+  takes it as a new result even without `--fresh`.
+- **Random values**: the helpers behind it, for profiles and their tests: `randomRange(input)`,
+  `createRandomValue(random, onPick?)`, `seededRandom(seed)` (mulberry32; a seed that is not an
+  integer from 0 to 4294967295 throws a `RangeError`) and `rangePosition(value, low, high)` (below,
+  within or above a reference range, for recomputing a flag), with the types `ResultValue`,
+  `RandomRange`, `RandomPick` and `RandomValue`. Bounds are computed as exact decimals, never in
+  floating point: 7.31 to 7.42 widens to exactly 7.288, not 7.287999999999999.
+- **Field edits**: `FieldEdit.occurrence` makes `rewriteFields` edit the nth segment with a name,
+  for example OBX-5 of the third OBX (`{ segment: 'OBX', occurrence: 3, field: 5 }`). Without it
+  the first is edited, exactly as before. An occurrence the message does not have is reported in
+  `skipped` (`no OBX segment #7 (the message has 3)`) and nothing is synthesised; an occurrence that
+  is not a positive safe integer throws a `RangeError`.
+
 ## 1.1.0 — 2026-10-07
 
 ### Added
