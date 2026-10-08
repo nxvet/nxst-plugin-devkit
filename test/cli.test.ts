@@ -29,6 +29,7 @@ const simulatorProfile = (connection: ConnectionModel): SimulatorProfile => ({
 
 const PERSISTENT = simulatorProfile({ kind: 'persistent', retryMs: 1500 })
 const PER_MESSAGE = simulatorProfile({ kind: 'per-message', probeMs: 10_000, preSendMs: 300, closeAfterAckMs: 3 })
+const RANDOMIZING: SimulatorProfile = { ...PERSISTENT, randomize: (bytes) => ({ bytes: Buffer.from(bytes), applied: [], skipped: [] }) }
 
 const captureProfile: CaptureProfile = {
   name: 'Demo analyzer',
@@ -142,6 +143,63 @@ describe('parseSimulatorArgs', () => {
     usageError(() => parseSimulatorArgs(PERSISTENT, ['--ack-timeout', '0'], DATE), /--ack-timeout must be an integer between 1/)
     usageError(() => parseSimulatorArgs(PERSISTENT, ['--patient-id', 'A|B'], DATE), /--patient-id: patient id must not contain HL7 delimiters/)
     usageError(() => parseSimulatorArgs(PERSISTENT, ['--patient-id', ' '], DATE), /--patient-id: patient id must not be empty/)
+  })
+
+  it('reads --random and --seed for a profile that implements randomize, --seed also without --random', () => {
+    const cases: Array<[string[], boolean, number | undefined]> = [
+      [[], false, undefined],
+      [['--random'], true, undefined],
+      [['--random', '--seed', '0'], true, 0],
+      [['--seed', '4294967295'], false, 4_294_967_295],
+      [['--seed', '007', '--random'], true, 7],
+    ]
+
+    for (const [argv, random, seed] of cases) {
+      const parsed = parseSimulatorArgs(RANDOMIZING, argv, DATE)
+
+      assert.equal(parsed.kind, 'run')
+
+      if (parsed.kind !== 'run') return
+
+      assert.deepEqual([parsed.options.random, parsed.options.seed], [random, seed], argv.join(' '))
+    }
+
+    for (const profile of [PERSISTENT, PER_MESSAGE]) {
+      const parsed = parseSimulatorArgs(profile, [], DATE)
+
+      assert.deepEqual(parsed.kind === 'run' && [parsed.options.random, parsed.options.seed], [false, undefined])
+    }
+  })
+
+  it('rejects a --seed that is not an integer from 0 to 4294967295', () => {
+    for (const value of ['4294967296', '-1', '1.5', 'x', '1e3', '', '99999999999999999999']) {
+      usageError(() => parseSimulatorArgs(RANDOMIZING, ['--random', '--seed', value], DATE), /^--seed must be an integer between 0 and 4294967295, got /)
+    }
+
+    usageError(() => parseSimulatorArgs(RANDOMIZING, ['--seed'], DATE), /--seed needs a value/)
+  })
+
+  it('refuses --random and --seed for a profile without randomize, and says why', () => {
+    for (const profile of [PERSISTENT, PER_MESSAGE]) {
+      usageError(() => parseSimulatorArgs(profile, ['--random'], DATE), /^--random needs a profile that implements randomize\(\) \(this one does not say which fields are result values\)$/)
+      usageError(() => parseSimulatorArgs(profile, ['--seed', '5'], DATE), /^--seed needs a profile that implements randomize\(\)/)
+      usageError(() => parseSimulatorArgs(profile, ['--fresh', '--random', '--list'], DATE), /^--random needs a profile/)
+    }
+  })
+
+  it('lists --random and --seed in the usage text only for a profile that implements randomize', () => {
+    const usage = parseSimulatorArgs(RANDOMIZING, ['--help'], DATE).usage
+
+    assert.match(usage, /^ {16}\[--random\] \[--seed <n>\]$/m)
+    assert.match(usage, /^ {2}--random {13}replace every result value with a bounded random number \(see "rand"\)$/m)
+    assert.match(usage, /^ {2}--seed <n> {11}seed of the random values \(default: a new one, printed at start\)$/m)
+
+    for (const profile of [PERSISTENT, PER_MESSAGE]) {
+      const plain = parseSimulatorArgs(profile, ['--help'], DATE).usage
+
+      assert.equal(plain.includes('--random'), false)
+      assert.equal(plain.includes('--seed'), false)
+    }
   })
 
   it('numbers the default output directory when the day already has results', () => {

@@ -35,11 +35,15 @@ import type {
   MessageState,
   ParsedCaptureArgs,
   ParsedSimulatorArgs,
+  RandomPick,
+  RandomRange,
+  RandomValue,
   RawFile,
   RedactionRule,
   RedactionSpec,
   Redactor,
   Replacement,
+  ResultValue,
   RewriteResult,
   SegmentView,
   Simulator,
@@ -60,6 +64,7 @@ const EXPECTED_RUNTIME_EXPORTS = [
   'buildFixture',
   'createCapture',
   'createLogger',
+  'createRandomValue',
   'createRedactor',
   'createSimulator',
   'describePatientIdOverride',
@@ -74,11 +79,14 @@ const EXPECTED_RUNTIME_EXPORTS = [
   'parseCommand',
   'parseFixtureSteps',
   'parseSimulatorArgs',
+  'randomRange',
+  'rangePosition',
   'redactChunks',
   'residualCheck',
   'rewriteFields',
   'runCapture',
   'runSimulator',
+  'seededRandom',
   'splitChunks',
   'spreadsheetLetters',
   'validatePatientId',
@@ -163,6 +171,28 @@ describe('published entry point', () => {
     assert.deepEqual(published.residualCheck([first.bytes], redactor), [])
     assert.equal(published.redactChunks([first.bytes], redactor).length, 1)
     assert.deepEqual([published.spreadsheetLetters(27), published.numberedLabel('ID-', 4)(12), published.letteredLabel('Pet')(2)], ['AA', 'ID-0012', 'PetB'])
+  })
+
+  it('exposes the random result values and the nth-segment field edit', () => {
+    const input: ResultValue = { name: 'GLU', value: '98', low: '74', high: '146' }
+    const range: RandomRange | undefined = published.randomRange(input)
+    const picks: RandomPick[] = []
+    const randomValue: RandomValue = published.createRandomValue(published.seededRandom(1), (pick) => { picks.push(pick) })
+    const value = randomValue(input) ?? ''
+    const text = 'MSH|^~\\&|DEMO||||20250310104500||ORU^R01|CTRL-1|P|2.4\rOBX|1|NM|X001^GLU||98\rOBX|2|NM|X002^BUN||12\r'
+    const edit: FieldEdit = { name: 'BUN', segment: 'OBX', occurrence: 2, field: 5, value: '15' }
+    // The profile hook and the options exist in the published declarations (Pick rejects unknown keys).
+    const hook: Pick<SimulatorProfile, 'randomize'> = {
+      randomize: (bytes, next: RandomValue): RewriteResult => published.rewriteFields(bytes, [{ ...edit, value: next({ ...input, name: 'BUN', value: '12' }) ?? '12' }]),
+    }
+    const options: Pick<SimulatorOptions, 'random' | 'seed'> = { random: true, seed: 1 }
+
+    assert.deepEqual(range, { min: 59.6, max: 160.4, decimals: 0, basis: 'reference' })
+    assert.deepEqual(picks, [{ input, range, value }])
+    assert.equal(published.rangePosition(value, '59.6', '160.4'), 'within')
+    assert.equal(published.rewriteFields(Buffer.from(text, 'utf-8'), [edit]).bytes.toString('utf-8'), text.replace('X002^BUN||12', 'X002^BUN||15'))
+    assert.notEqual(hook.randomize?.(Buffer.from(text, 'utf-8'), randomValue).bytes.toString('utf-8'), text)
+    assert.deepEqual(options, { random: true, seed: 1 })
   })
 
   it('exposes the simulator and capture entry points with their option types', () => {

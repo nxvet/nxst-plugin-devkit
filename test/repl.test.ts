@@ -56,6 +56,19 @@ describe('parseCommand: other commands', () => {
     assert.deepEqual(parseCommand('id A 1'), { kind: 'unknown', input: 'id A 1' })
   })
 
+  it('decodes rand, rand on and rand off', () => {
+    assert.deepEqual(parseCommand('rand'), { kind: 'show-random' })
+    assert.deepEqual(parseCommand('rand on'), { kind: 'set-random', on: true })
+    assert.deepEqual(parseCommand('rand off'), { kind: 'set-random', on: false })
+    assert.deepEqual(parseCommand('  rand   on  '), { kind: 'set-random', on: true })
+  })
+
+  it('rejects anything else that starts with rand as unknown', () => {
+    for (const input of ['rand x', 'rand on off', 'rand off on', 'rand on id=1', 'rand id=1', 'rand 1', 'rand ON', 'rand,on', 'random', 'rand-on']) {
+      assert.deepEqual(parseCommand(input), { kind: 'unknown', input }, input)
+    }
+  })
+
   it('treats an empty line as a no-op', () => {
     assert.deepEqual(parseCommand(''), { kind: 'noop' })
     assert.deepEqual(parseCommand('   '), { kind: 'noop' })

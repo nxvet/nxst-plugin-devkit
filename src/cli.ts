@@ -12,6 +12,7 @@ import type { Interface } from 'node:readline'
 import type { Readable, Writable } from 'node:stream'
 
 import type { CaptureOptions, CaptureProfile } from './capture.ts'
+import { MAX_SEED } from './random.ts'
 import { validatePatientId } from './repl.ts'
 import type { SimulatorOptions, SimulatorProfile } from './simulator.ts'
 
@@ -47,8 +48,17 @@ interface RawArgs {
   help: boolean
 }
 
-/** Splits `argv` into valued flags and switches. Unknown flags and missing values are usage errors. */
-const splitArgs = (argv: readonly string[], valued: ReadonlySet<string>, switches: ReadonlySet<string>, usage: string): RawArgs => {
+/**
+ * Splits `argv` into valued flags and switches. Unknown flags and missing values are usage errors;
+ * a flag listed in `refused` is one too, reported with its reason instead of as unknown.
+ */
+const splitArgs = (
+  argv: readonly string[],
+  valued: ReadonlySet<string>,
+  switches: ReadonlySet<string>,
+  usage: string,
+  refused: ReadonlyMap<string, string> = new Map(),
+): RawArgs => {
   const out: RawArgs = { values: new Map(), switches: new Set(), help: false }
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -73,6 +83,10 @@ const splitArgs = (argv: readonly string[], valued: ReadonlySet<string>, switche
       i += 1
       continue
     }
+
+    const reason = refused.get(arg)
+
+    if (reason !== undefined) throw new UsageError(`${arg} ${reason}`, usage)
 
     throw new UsageError(`unknown argument ${JSON.stringify(arg)}`, usage)
   }
@@ -179,8 +193,12 @@ export type ParsedSimulatorArgs =
   | { kind: 'help', usage: string }
   | { kind: 'run', options: SimulatorOptions, list: boolean, usage: string }
 
+/** Why `--random` and `--seed` are refused for a profile without `randomize`. */
+const NO_RANDOMIZE = 'needs a profile that implements randomize() (this one does not say which fields are result values)'
+
 const simulatorUsage = (profile: SimulatorProfile): string => {
   const model = profile.connection
+  const randomizable = profile.randomize !== undefined
   const modelFlags = model.kind === 'persistent'
     ? `  --retry <ms>         reconnect delay after a refused connection or a close by the receiver (default ${model.retryMs}; 0 = never)`
     : [
@@ -192,6 +210,7 @@ const simulatorUsage = (profile: SimulatorProfile): string => {
     `Usage: simulate [--host <ip>] [--port <n>] [--source <session.jsonl | captures/<dir> | file.hl7>]`,
     '                [--gap <ms>|real] [--ack-timeout <ms>] [--chunk <bytes>] [--chunk-gap <ms>]',
     `                [--patient-id <id>] [--fresh] [--hold <s>] [--out <dir>] [${model.kind === 'persistent' ? '--retry <ms>' : '--probe <ms>] [--pre-send <ms>'}] [--list]`,
+    ...(randomizable ? ['                [--random] [--seed <n>]'] : []),
     '',
     `${profile.name} simulator: plays the analyzer and sends captured messages to a real receiver.`,
     '',
@@ -205,6 +224,12 @@ const simulatorUsage = (profile: SimulatorProfile): string => {
     `  --chunk-gap <ms>     pause between pieces (default ${profile.defaults.chunkGapMs ?? 10})`,
     '  --patient-id <id>    initial patient id override (the "id" command changes it later)',
     '  --fresh              renew the control id and timestamp of every message before sending',
+    ...(randomizable
+      ? [
+          '  --random             replace every result value with a bounded random number (see "rand")',
+          '  --seed <n>           seed of the random values (default: a new one, printed at start)',
+        ]
+      : []),
     '  --hold <s>           keep connections open this long after "q" before exiting (default 0)',
     '  --out <dir>          output directory (default captures/simulate-<date> under the plugin directory;',
     '                       a relative path is taken from the current directory)',
@@ -217,17 +242,28 @@ const simulatorUsage = (profile: SimulatorProfile): string => {
 /**
  * Parses the simulator's command line. Throws `UsageError` on a problem; never exits. The clock
  * is only used to name the default output directory. A relative `--source` or `--out` is taken from
- * the current directory; the defaults are under `profile.rootDir`.
+ * the current directory; the defaults are under `profile.rootDir`. `--random` and `--seed` exist
+ * only for a profile that implements `randomize`; `--seed` alone is accepted (it applies once `rand
+ * on` is typed).
  */
 export const parseSimulatorArgs = (profile: SimulatorProfile, argv: readonly string[], now: Date = new Date()): ParsedSimulatorArgs => {
   const usage = simulatorUsage(profile)
   const model = profile.connection
   const valued = new Set(['--host', '--port', '--source', '--gap', '--ack-timeout', '--chunk', '--chunk-gap', '--patient-id', '--hold', '--out'])
+  const switches = new Set(['--fresh', '--list'])
+  const refused = new Map<string, string>()
 
   if (model.kind === 'persistent') valued.add('--retry')
   else valued.add('--probe').add('--pre-send')
 
-  const raw = splitArgs(argv, valued, new Set(['--fresh', '--list']), usage)
+  if (profile.randomize !== undefined) {
+    valued.add('--seed')
+    switches.add('--random')
+  } else {
+    refused.set('--random', NO_RANDOMIZE).set('--seed', NO_RANDOMIZE)
+  }
+
+  const raw = splitArgs(argv, valued, switches, usage, refused)
 
   if (raw.help) return { kind: 'help', usage }
 
@@ -243,6 +279,7 @@ export const parseSimulatorArgs = (profile: SimulatorProfile, argv: readonly str
   const gap = get('--gap') ?? String(profile.defaults.gapMs)
   const sourceArg = get('--source')
   const outArg = get('--out')
+  const seedArg = get('--seed')
 
   const options: SimulatorOptions = {
     host: get('--host') ?? '127.0.0.1',
@@ -255,6 +292,8 @@ export const parseSimulatorArgs = (profile: SimulatorProfile, argv: readonly str
     chunkGapMs: integer('--chunk-gap', get('--chunk-gap') ?? String(profile.defaults.chunkGapMs ?? 10), 0, MAX_TIMER_MS, usage),
     patientId,
     fresh: raw.switches.has('--fresh'),
+    random: raw.switches.has('--random'),
+    seed: seedArg === undefined ? undefined : integer('--seed', seedArg, 0, MAX_SEED, usage),
     holdSeconds: integer('--hold', get('--hold') ?? '0', 0, 86_400, usage),
     retryMs: model.kind === 'persistent' ? integer('--retry', get('--retry') ?? String(model.retryMs), 0, MAX_TIMER_MS, usage) : 0,
     probeMs: model.kind === 'per-message' ? integer('--probe', get('--probe') ?? String(model.probeMs), 0, MAX_TIMER_MS, usage) : 0,

@@ -29,6 +29,10 @@ export type Command =
   | { kind: 'set-id', patientId: string | undefined }
   /** `id`: show the current override. */
   | { kind: 'show-id' }
+  /** `rand on` / `rand off`: replace the result values of later sends with bounded random numbers, or stop. */
+  | { kind: 'set-random', on: boolean }
+  /** `rand`: show whether random values are on, and their seed. */
+  | { kind: 'show-random' }
   | { kind: 'noop' }
   | { kind: 'unknown', input: string }
 
@@ -63,9 +67,10 @@ type Sendable = Extract<Command, { kind: 'send' | 'send-next' | 'all' }>
  * operator can type what the list shows. `s`, `a` and bare numbers accept a trailing `id=<value>`
  * that applies to that command only; `r` does not (a resend must look like the analyzer's own
  * resend). `id <value>` / `id` / `id -` manage the standing override; its value is split on
- * whitespace only, so a patient id may contain a comma. Anything with extra arguments, a `0`, or
- * an unknown word is `unknown`: a mistyped command must never send something by accident. The
- * patient id format is not validated here (see `validatePatientId`); this is syntax only.
+ * whitespace only, so a patient id may contain a comma. `rand on` / `rand off` / `rand` switch the
+ * random result values and show them. Anything with extra arguments, a `0`, or an unknown word is
+ * `unknown`: a mistyped command must never send something by accident. The patient id format is
+ * not validated here (see `validatePatientId`); this is syntax only.
  */
 export const parseCommand = (line: string): Command => {
   const trimmed = line.trim()
@@ -80,6 +85,13 @@ export const parseCommand = (line: string): Command => {
     if (words.length > 2) return unknown
 
     return { kind: 'set-id', patientId: words[1] === '-' ? undefined : words[1] }
+  }
+
+  if (words[0] === 'rand') {
+    if (words.length === 1) return { kind: 'show-random' }
+    if (words.length === 2 && (words[1] === 'on' || words[1] === 'off')) return { kind: 'set-random', on: words[1] === 'on' }
+
+    return unknown
   }
 
   let patientId: string | undefined

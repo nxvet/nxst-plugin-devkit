@@ -12,11 +12,14 @@ import path from 'node:path'
 import { PassThrough } from 'node:stream'
 import { describe, it } from 'node:test'
 
-import { component, field, findSegment, hl7Timestamp, parseMessage } from '@nxvet/nxst-hl7-parser'
+import { component, field, findSegment, findSegments, hl7Timestamp, parseMessage } from '@nxvet/nxst-hl7-parser'
 
 import type { CaptureOptions, CaptureProfile } from '../src/capture.ts'
 import { createCapture } from '../src/capture.ts'
+import type { FieldEdit, RewriteResult } from '../src/edit.ts'
 import { rewriteFields } from '../src/edit.ts'
+import type { RandomValue } from '../src/random.ts'
+import { randomRange, rangePosition } from '../src/random.ts'
 import type { ConnectionModel, SimulatorOptions, SimulatorProfile } from '../src/simulator.ts'
 import { createSimulator } from '../src/simulator.ts'
 import { CONNECTION, fixture, message, textLine } from './support.ts'
@@ -93,6 +96,65 @@ const captureProfile = (rootDir: string): CaptureProfile => ({
   buildAck: (_frame, verdict, context) => `MSH|^~\\&|RECEIVER||DEMO||20250310104500||ACK^R01|ACK-${context.sequence}|P|2.4\rMSA|${context.code}|${verdict.controlId}|${verdict.ack?.text ?? ''}\r`,
 })
 
+/** OBX-7 of the synthetic analyzer: `low-high`, where either end may be negative (`-3-3`). */
+const REFERENCE_RANGE = /^(-?\d+(?:\.\d+)?)-(-?\d+(?:\.\d+)?)$/
+
+const FLAGS = { below: 'L', within: 'N', above: 'H' } as const
+
+interface Item {
+  name: string
+  value: string
+  low: string
+  high: string
+  flag: string
+}
+
+/** The result items of a synthetic message: OBX-5, with the reference range in OBX-7 and the flag in OBX-8. */
+const itemsOf = (bytes: Uint8Array): Item[] => findSegments(parseMessage(decode(bytes)), 'OBX').map((obx) => {
+  const [, low = '', high = ''] = REFERENCE_RANGE.exec(field(obx, 7).trim()) ?? []
+
+  return { name: component(field(obx, 3), 2), value: field(obx, 5), low, high, flag: field(obx, 8) }
+})
+
+/**
+ * The synthetic analyzer's `randomize`: OBX-5 of every OBX gets a new value, and its OBX-8 flag is
+ * recomputed against the original reference range in OBX-7.
+ */
+const randomizeResults = (bytes: Uint8Array, randomValue: RandomValue): RewriteResult => {
+  const edits: FieldEdit[] = []
+  const left: RewriteResult['skipped'] = []
+
+  for (const [i, { name, value: original, low, high }] of itemsOf(bytes).entries()) {
+    const value = randomValue({ name, value: original, low, high })
+
+    if (value === undefined) {
+      left.push({ name, reason: 'not a plain number' })
+      continue
+    }
+
+    const position = rangePosition(value, low, high)
+
+    edits.push({ name, segment: 'OBX', occurrence: i + 1, field: 5, value })
+
+    if (position !== undefined) edits.push({ name: `${name} flag`, segment: 'OBX', occurrence: i + 1, field: 8, value: FLAGS[position] })
+  }
+
+  const result = rewriteFields(bytes, edits)
+
+  return { ...result, skipped: [...result.skipped, ...left] }
+}
+
+const RESULT_MESSAGE = message({
+  controlId: 'CTRL-R1',
+  obx: [
+    'OBX|1|NM|X001^GLU^DEMO||98|mg/dL|74-146|N|||F',
+    'OBX|2|NM|X002^PH^DEMO||7.074||7.31-7.42|L|||F',
+    'OBX|3|NM|X003^CRP^DEMO||<5.0|mg/L|0-10|N|||F',
+    'OBX|4|NM|X004^BE^DEMO||0.4|mmol/L|-3-3|N|||F',
+    'OBX|5|NM|X005^DELTA^DEMO||-1.5|||||F',
+  ],
+})
+
 interface Harness {
   root: string
   port: number
@@ -133,7 +195,14 @@ const freePort = (): Promise<number> => new Promise((resolve) => {
 
 const setup = async (
   connection: ConnectionModel,
-  options: { listen?: boolean, fixtureLines?: string[], capture?: Partial<CaptureOptions>, simulator?: Partial<SimulatorOptions> } = {},
+  options: {
+    listen?: boolean
+    fixtureLines?: string[]
+    capture?: Partial<CaptureOptions>
+    simulator?: Partial<SimulatorOptions>
+    /** Members added to (or replacing those of) the synthetic simulator profile. */
+    profile?: Partial<SimulatorProfile>
+  } = {},
 ): Promise<Harness> => {
   const root = mkdtempSync(path.join(os.tmpdir(), 'devkit-loop-'))
   const source = path.join(root, 'fixtures', 'session.jsonl')
@@ -165,7 +234,7 @@ const setup = async (
   const port = options.listen === false ? await freePort() : (await capture.listen()).port
   const simulatorOut = collect()
   const simulatorDir = path.join(root, 'captures', 'simulate')
-  const simulator = createSimulator(simulatorProfile(root, connection), {
+  const simulator = createSimulator({ ...simulatorProfile(root, connection), ...options.profile }, {
     host: '127.0.0.1',
     port,
     source,
@@ -384,6 +453,215 @@ describe('loopback, one connection per message', () => {
     await h.capture.stop()
     assert.equal(h.capture.stats.frames, 1)
     assert.ok(h.simulator.stats.closedByUs + h.simulator.stats.closedWithError >= 1)
+  })
+})
+
+describe('loopback, random result values', () => {
+  const PERSISTENT: ConnectionModel = { kind: 'persistent', retryMs: 0 }
+  const SEED = 20_251_008
+  const SOURCE = Buffer.from(RESULT_MESSAGE, 'utf-8')
+  const RANDOMIZING = { fixtureLines: [textLine(RESULT_MESSAGE, 0)], profile: { randomize: randomizeResults } }
+
+  /** The text after `random values: ` on every line that reports a randomized send. */
+  const randomLines = (output: string): string[] => [...output.matchAll(/^\[[^\]]+\] {5}random values: (.*)$/gm)].map((match) => match[1])
+
+  /** The `Settings:` line, without its timestamp. */
+  const settingsLine = (output: string): string => /^\[[^\]]+\] (Settings: .*)$/m.exec(output)?.[1] ?? ''
+
+  /** Sends message 1 `times` times with random values on, and returns the bytes sent and the output. */
+  const sendRandom = async (seed: number | undefined, times: number): Promise<{ sent: Buffer[], output: string }> => {
+    const h = await setup(PERSISTENT, { ...RANDOMIZING, simulator: { random: true, seed } })
+
+    await h.simulator.start()
+
+    for (let n = 1; n <= times; n += 1) {
+      await h.simulator.run('1')
+      await until(() => h.simulator.stats.matchedOk === n)
+    }
+
+    await h.simulator.finish()
+    await h.capture.stop()
+    assert.deepEqual(h.rawFiles(), h.sentFiles())
+
+    return { sent: h.sentFiles(), output: h.simulatorOutput() }
+  }
+
+  it('replaces every result value with a bounded random number and brings its flag in line, leaving every other byte as it was', async () => {
+    const h = await setup(PERSISTENT, { ...RANDOMIZING, simulator: { random: true, seed: SEED } })
+
+    await h.simulator.start()
+    await h.simulator.run('1')
+    await until(() => h.simulator.stats.matchedOk === 1)
+    h.simulator.list()
+
+    const summary = await h.simulator.finish()
+
+    await h.capture.stop()
+    assert.equal(summary.ok, true)
+
+    const [raw] = h.rawFiles()
+    const before = itemsOf(SOURCE)
+    const after = itemsOf(raw)
+
+    assert.deepEqual(h.rawFiles(), h.sentFiles(), 'the receiver got exactly the bytes the simulator wrote')
+    assert.equal(after.length, before.length)
+
+    for (const [i, item] of before.entries()) {
+      const range = randomRange(item)
+
+      if (range === undefined) {
+        assert.deepEqual(after[i], item, `${item.name} is not a plain number and is left as it was`)
+        continue
+      }
+
+      const value = after[i].value
+      const position = rangePosition(value, item.low, item.high)
+
+      assert.notEqual(value, item.value, `${item.name} carries a new value`)
+      assert.ok(Number(value) >= range.min && Number(value) <= range.max, `${item.name}: ${value} lies within ${range.min} to ${range.max}`)
+      assert.equal(value.split('.')[1]?.length ?? 0, range.decimals, `${item.name}: ${value} has ${range.decimals} decimals`)
+      assert.equal(after[i].flag, position === undefined ? item.flag : FLAGS[position], `${item.name}: the flag follows the new value`)
+    }
+
+    // Writing the original values and flags back gives the source message, byte for byte.
+    const restored = rewriteFields(raw, before.flatMap((item, i): FieldEdit[] => [
+      { name: item.name, segment: 'OBX', occurrence: i + 1, field: 5, value: item.value },
+      { name: `${item.name} flag`, segment: 'OBX', occurrence: i + 1, field: 8, value: item.flag },
+    ]))
+
+    assert.deepEqual(restored.bytes, SOURCE)
+
+    const output = h.simulatorOutput()
+
+    assert.match(settingsLine(output), new RegExp(`; patient ids as in the source; random values on \\(seed ${SEED}; --seed ${SEED} repeats them\\)$`))
+    assert.match(output, new RegExp(`^\\[[^\\]]+\\] {3}Random values: on \\(seed ${SEED}; "rand off" stops them\\)$`, 'm'))
+    assert.deepEqual(randomLines(output), [
+      `GLU 98 → ${after[0].value} (59.6 to 160.4), PH 7.074 → ${after[1].value} (7.288 to 7.442), BE 0.4 → ${after[3].value} (-4.2 to 4.2), `
+        + `DELTA -1.5 → ${after[4].value} (-3 to 0); left as they were: CRP (not a plain number)`,
+    ])
+    assert.equal(output.includes('rewrote'), false, 'the random values are not repeated on a "rewrote" line')
+
+    for (const value of PII) assert.equal(output.includes(value), false, `${value} must not appear in the simulator output`)
+  })
+
+  it('draws new values on every send, and the same ones again for the same seed (printed when none is given)', async () => {
+    const first = await sendRandom(undefined, 2)
+    const seed = Number(/random values on \(seed (\d+); --seed \1 repeats them\)$/.exec(settingsLine(first.output))?.[1])
+
+    assert.ok(Number.isInteger(seed) && seed >= 0 && seed <= 4_294_967_295, `the start-up line names the seed: ${settingsLine(first.output)}`)
+    assert.notDeepEqual(first.sent[0], first.sent[1], 'each send draws new values')
+
+    const again = await sendRandom(seed, 2)
+
+    assert.deepEqual(again.sent, first.sent, 'the same seed and the same commands send the same bytes')
+    assert.deepEqual(randomLines(again.output), randomLines(first.output))
+
+    const other = await sendRandom(seed === 0 ? 1 : seed - 1, 2)
+
+    assert.notDeepEqual(other.sent, first.sent, 'another seed sends other values')
+  })
+
+  it('resends the values it sent with r, sends the source values after "rand off" and random ones again after "rand on"', async () => {
+    const h = await setup(PERSISTENT, { ...RANDOMIZING, simulator: { random: true, seed: SEED } })
+    const sourceValues = itemsOf(SOURCE).map((item) => item.value)
+
+    await h.simulator.start()
+    await h.simulator.run('1')
+    await until(() => h.simulator.stats.matchedOk === 1)
+    await h.simulator.run('r')
+    await until(() => h.simulator.stats.matchedOk === 2)
+    await h.simulator.run('rand off')
+    await h.simulator.run('rand')
+    await h.simulator.run('1')
+    await until(() => h.simulator.stats.matchedOk === 3)
+    await h.simulator.run('r')
+    await until(() => h.simulator.stats.matchedOk === 4)
+    await h.simulator.run('rand on')
+    await h.simulator.run('rand')
+    await h.simulator.run('1')
+    await until(() => h.simulator.stats.matchedOk === 5)
+
+    const summary = await h.simulator.finish()
+
+    await h.capture.stop()
+    assert.equal(summary.ok, true)
+
+    const raw = h.rawFiles()
+    const values = raw.map((bytes) => itemsOf(bytes).map((item) => item.value))
+
+    assert.deepEqual(raw, h.sentFiles())
+    assert.equal(raw.length, 5)
+    assert.notDeepEqual(values[0], sourceValues)
+    assert.deepEqual(values[1], values[0], 'r resends the random values that were sent')
+    assert.notEqual(mshField(raw[1], 7), mshField(raw[0], 7), 'and changes what the profile\'s resend changes')
+    assert.deepEqual(raw[2], SOURCE, 'after "rand off" the source bytes are sent')
+    assert.deepEqual(values[3], sourceValues, 'and resent')
+    assert.notDeepEqual(values[4], sourceValues, 'after "rand on" values are random again')
+    assert.notDeepEqual(values[4], values[0], 'drawn afresh')
+
+    const output = h.simulatorOutput()
+
+    assert.equal(randomLines(output).length, 2, 'one random line per randomized send, none for a resend')
+    assert.match(output, /random values off: later sends carry the result values from the source/)
+    assert.match(output, /Random values: off \("rand on" starts them\)/)
+    assert.match(output, new RegExp(`later sends will carry random result values \\(seed ${SEED}; r still resends the values last sent; "rand off" stops them\\)`))
+    assert.match(output, new RegExp(`Random values: on \\(seed ${SEED}; "rand off" stops them\\)`))
+  })
+
+  it('sends the source bytes unchanged while random values are off', async () => {
+    const h = await setup(PERSISTENT, RANDOMIZING)
+
+    await h.simulator.start()
+    await h.simulator.run('1')
+    await until(() => h.simulator.stats.matchedOk === 1)
+    h.simulator.list()
+    await h.simulator.finish()
+    await h.capture.stop()
+
+    const output = h.simulatorOutput()
+
+    assert.deepEqual(h.sentFiles(), [SOURCE])
+    assert.deepEqual(h.rawFiles(), [SOURCE])
+    assert.match(settingsLine(output), /; patient ids as in the source; random values off$/)
+    assert.match(output, /Random values: off \("rand on" starts them\)/)
+    assert.deepEqual(randomLines(output), [])
+  })
+
+  it('says random values are not available when the profile does not implement randomize, and changes nothing', async () => {
+    const h = await setup(PERSISTENT, { fixtureLines: [textLine(RESULT_MESSAGE, 0)] })
+
+    await h.simulator.start()
+
+    for (const command of ['rand', 'rand on', 'rand off']) await h.simulator.run(command)
+
+    await h.simulator.run('1')
+    await until(() => h.simulator.stats.matchedOk === 1)
+    h.simulator.list()
+    await h.simulator.run('h')
+    await h.simulator.finish()
+    await h.capture.stop()
+
+    const output = h.simulatorOutput()
+
+    assert.deepEqual(h.sentFiles(), [SOURCE])
+    assert.equal(output.match(/ {2}\(not available: the profile does not describe its result values\)$/gm)?.length, 3)
+    assert.match(output, /^ {2}rand \[on\|off\] {2}not available: the profile does not describe its result values$/m)
+    assert.match(settingsLine(output), /; patient ids as in the source$/)
+    assert.equal(/random values/i.test(output), false, 'nothing mentions random values')
+  })
+
+  it('refuses an invalid seed, and random values without randomize, before anything starts', async () => {
+    for (const seed of [-1, 1.5, 4_294_967_296]) {
+      await assert.rejects(
+        setup(PERSISTENT, { ...RANDOMIZING, listen: false, simulator: { seed } }),
+        { name: 'RangeError', message: `createSimulator: seed must be an integer from 0 to 4294967295, got ${seed}` },
+      )
+    }
+
+    await assert.rejects(
+      setup(PERSISTENT, { fixtureLines: [textLine(RESULT_MESSAGE, 0)], listen: false, simulator: { random: true } }),
+      { message: 'createSimulator: random values need a profile that implements randomize()' },
+    )
   })
 })
 

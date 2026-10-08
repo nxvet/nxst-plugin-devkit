@@ -2,14 +2,16 @@
 // listening on its port), sending messages captured from the real device and checking every ACK.
 //
 // What the analyzer means by its bytes (which message is QC, how an ACK is judged, which fields a
-// resend renews, which fields hold personal data) is instrument semantics and comes from the
-// `SimulatorProfile` the plugin supplies. This module owns the mechanics: loading messages,
-// the interactive mode, the two connection models analyzers use, the send pipeline, ACK matching,
-// timeouts, the per-message state, the summary and the exit code.
+// resend renews, which fields hold personal data or result values) is instrument semantics and
+// comes from the `SimulatorProfile` the plugin supplies. This module owns the mechanics: loading
+// messages, the interactive mode, the two connection models analyzers use, the send pipeline
+// (random result values included), ACK matching, timeouts, the per-message state, the summary and
+// the exit code.
 //
 // `createSimulator` never touches `process`, never exits, never installs signal handlers and
 // never creates a readline interface: it works through the `Io` object it is given, so a test can
 // drive it in-process. `runSimulator` is the thin command-line wrapper that does all of that.
+import { randomInt } from 'node:crypto'
 import fs from 'node:fs'
 import net from 'node:net'
 import path from 'node:path'
@@ -24,6 +26,8 @@ import type { RewriteResult } from './edit.ts'
 import { splitChunks, wrapFrame } from './edit.ts'
 import type { Message, MessageSet } from './fixture.ts'
 import { messagesFromFixture, messagesFromRawFiles } from './fixture.ts'
+import type { RandomPick, RandomValue } from './random.ts'
+import { MAX_SEED, createRandomValue, requireSeed, seededRandom } from './random.ts'
 import type { MessageState } from './repl.ts'
 import { describePatientIdOverride, describeState, formatTable, parseCommand, validatePatientId } from './repl.ts'
 
@@ -100,6 +104,15 @@ export interface SimulatorProfile {
   setPatientId(bytes: Uint8Array, id: string): RewriteResult
   /** Judges an ACK whose MSA-2 matched the control id of `sentBytes`. */
   evaluateAck(ackText: string, sentBytes: Uint8Array): AckVerdict
+  /**
+   * Optional; a profile without it cannot use `--random` or `rand`. Returns the bytes with every
+   * exam result value the plugin would upload replaced with `randomValue({ name, value, low, high })`,
+   * and whatever the analyzer derives from a value (an abnormal flag, for example) brought in line
+   * with the new one. A value for which `randomValue` returns `undefined` (it is not a plain number)
+   * is left as it is and reported in `skipped`; every other byte stays as it was. Called after
+   * `setPatientId` and `fresh`, and never for `r`: a resend carries the values that were sent.
+   */
+  randomize?(bytes: Uint8Array, randomValue: RandomValue): RewriteResult
 }
 
 /** The options `createSimulator` runs with (see `parseSimulatorArgs` for the command-line form). */
@@ -125,6 +138,14 @@ export interface SimulatorOptions {
   /** Initial patient id override; the `id` command changes it. */
   patientId: string | undefined
   fresh: boolean
+  /** Start with random result values on (default off); the `rand` command changes it. Needs `profile.randomize`. */
+  random?: boolean
+  /**
+   * The seed of the random values, an integer from 0 to 4294967295. One generator serves the whole
+   * run, so the same seed and the same commands give the same values. Default: a new seed, printed
+   * at start.
+   */
+  seed?: number
   holdSeconds: number
   /** Persistent model only. */
   retryMs: number
@@ -283,12 +304,36 @@ const counted = (record: Record<string, number>): string => {
   return entries.length === 0 ? 'none' : entries.map(([key, value]) => `${key || '(empty)'}×${value}`).join(', ')
 }
 
+/**
+ * The line printed under a send with random values:
+ * `random values: GLU 98 → 121 (59.6 to 160.4), ...; left as they were: CRP (not a plain number)`.
+ * Result values are not personal data; nothing else from the message is shown.
+ */
+const describeRandomValues = (picks: readonly RandomPick[], skipped: RewriteResult['skipped']): string => {
+  const drawn = picks.map((pick) => `${pick.input.name.trim() || '(unnamed)'} ${pick.input.value.trim()} → ${pick.value} (${pick.range.min} to ${pick.range.max})`)
+  const kept = skipped.map((entry) => `${entry.name} (${entry.reason})`)
+
+  if (drawn.length === 0 && kept.length === 0) return 'random values: none (the profile found no result value in this message)'
+
+  return `random values: ${drawn.length > 0 ? drawn.join(', ') : 'none'}${kept.length > 0 ? `; left as they were: ${kept.join(', ')}` : ''}`
+}
+
 export const createSimulator = (profile: SimulatorProfile, options: SimulatorOptions, io: Io): Simulator => {
   const clock = (): Date => io.now?.() ?? new Date()
   const nowMs = (): number => clock().getTime()
   const logger = createLogger(io)
   const { say } = logger
   const model = profile.connection
+
+  if (options.random === true && profile.randomize === undefined) {
+    throw new Error('createSimulator: random values need a profile that implements randomize()')
+  }
+
+  if (options.seed !== undefined) requireSeed('createSimulator: seed', options.seed)
+
+  // One generator for the whole run, so the same seed and the same commands give the same values.
+  const seed = options.seed ?? randomInt(0, MAX_SEED + 1)
+  const random = seededRandom(seed)
   const { set: source, kind: sourceKind } = loadSource(options.source)
   const messages = source.messages
 
@@ -306,6 +351,7 @@ export const createSimulator = (profile: SimulatorProfile, options: SimulatorOpt
   const sleepers = new Set<() => void>()
 
   let patientIdOverride = options.patientId
+  let randomOn = options.random === true
   let connectionCount = 0
   let probeCount = 0
   let current: Connection | undefined
@@ -357,6 +403,11 @@ export const createSimulator = (profile: SimulatorProfile, options: SimulatorOpt
 
   const pendingTotal = (): number => [...connections.values()].reduce((sum, conn) => sum + conn.pending.length, 0)
 
+  /** The state of the random values, as printed under the list and by `rand` (profiles with `randomize` only). */
+  const describeRandom = (): string => (randomOn
+    ? `Random values: on (seed ${seed}; "rand off" stops them)`
+    : 'Random values: off ("rand on" starts them)')
+
   // ----------------------------------------------------------------------------------------
   // List
   // ----------------------------------------------------------------------------------------
@@ -375,6 +426,8 @@ export const createSimulator = (profile: SimulatorProfile, options: SimulatorOpt
     for (const line of formatTable(['#', ...profile.menuColumns, 'size', 'status'], rows)) say(`  ${line}`)
 
     say(`  ${describePatientIdOverride(patientIdOverride)}`)
+
+    if (profile.randomize !== undefined) say(`  ${describeRandom()}`)
 
     if (options.gapMs === undefined) {
       say(`  (--gap real: gaps from the capture: ${messages.map((message) => `#${message.index} +${message.delayMs} ms`).join(', ')})`)
@@ -736,6 +789,7 @@ export const createSimulator = (profile: SimulatorProfile, options: SimulatorOpt
     const applied: string[] = []
     const skipped: string[] = []
     let working: Buffer = Buffer.from(bytes)
+    let randomLine: string | undefined
 
     const take = (result: RewriteResult): void => {
       working = result.bytes
@@ -744,12 +798,23 @@ export const createSimulator = (profile: SimulatorProfile, options: SimulatorOpt
     }
 
     if (mode === 'resend') {
+      // `bytes` are the bytes last sent, random values included: like the analyzer, a resend
+      // carries the same results and changes only what `profile.resend` changes.
       take(profile.resend(working, now))
     } else {
       const id = patientId ?? patientIdOverride
 
       if (id !== undefined) take(profile.setPatientId(working, id))
       if (options.fresh) take(profile.fresh(working, now, seenControlIds))
+
+      if (randomOn && profile.randomize !== undefined) {
+        const picks: RandomPick[] = []
+        const result = profile.randomize(working, createRandomValue(random, (pick) => { picks.push(pick) }))
+
+        // Reported on a line of its own, not in "rewrote": that line would repeat every value.
+        working = result.bytes
+        randomLine = describeRandomValues(picks, result.skipped)
+      }
     }
 
     const info = profile.describe(working, now)
@@ -774,6 +839,7 @@ export const createSimulator = (profile: SimulatorProfile, options: SimulatorOpt
       say(`    rewrote ${applied.length > 0 ? applied.join(', ') : 'nothing'}${skipped.length > 0 ? `; skipped ${skipped.join(', ')}` : ''}`)
     }
 
+    if (randomLine !== undefined) say(`    ${randomLine}`)
     if (ackExpected === false) say('    no ACK is expected for this message; a timeout will not count as a failure')
 
     const frame = wrapFrame(working)
@@ -893,6 +959,10 @@ export const createSimulator = (profile: SimulatorProfile, options: SimulatorOpt
     say('  (not available for the per-message connection model: the analyzer opens one connection per result and closes it itself)')
   }
 
+  const randomNotAvailable = (): void => {
+    say('  (not available: the profile does not describe its result values)')
+  }
+
   const help = (): string => [
     '  <n> [<n> ...]  send those messages (for example 3, or 3 5 8); each waits for its ACK in the per-message model',
     '  s [n]          send the next message, or message n',
@@ -900,6 +970,9 @@ export const createSimulator = (profile: SimulatorProfile, options: SimulatorOpt
     '  r              resend the last message the way the analyzer would',
     '  ... id=<value> apply a patient id to that command only (for example 3 id=A123)',
     '  id <value>     set the patient id for every later send; id shows it; id - clears it',
+    profile.randomize !== undefined
+      ? '  rand [on|off]  replace result values with bounded random numbers (r still resends the same values)'
+      : '  rand [on|off]  not available: the profile does not describe its result values',
     '  l              print the message list again',
     ...(model.kind === 'persistent'
       ? ['  n              open another connection (the old one stays open)', '  c              close the current connection (FIN)', '  k              destroy the current connection']
@@ -966,6 +1039,25 @@ export const createSimulator = (profile: SimulatorProfile, options: SimulatorOpt
         return 'continue'
       case 'show-id':
         say(`  ${describePatientIdOverride(patientIdOverride)}`)
+        return 'continue'
+      case 'set-random':
+        if (profile.randomize === undefined) {
+          randomNotAvailable()
+          return 'continue'
+        }
+
+        randomOn = command.on
+        say(command.on
+          ? `  later sends will carry random result values (seed ${seed}; r still resends the values last sent; "rand off" stops them)`
+          : '  random values off: later sends carry the result values from the source')
+        return 'continue'
+      case 'show-random':
+        if (profile.randomize === undefined) {
+          randomNotAvailable()
+          return 'continue'
+        }
+
+        say(`  ${describeRandom()}`)
         return 'continue'
       case 'connect':
         if (model.kind !== 'persistent') {
@@ -1038,7 +1130,8 @@ export const createSimulator = (profile: SimulatorProfile, options: SimulatorOpt
       + `ACK timeout ${options.ackTimeoutMs} ms (no resend); gap ${options.gapMs === undefined ? 'as captured' : `${options.gapMs} ms`}; `
       + `${options.chunkBytes > 0 ? `frames written in ${options.chunkBytes}-byte pieces ${options.chunkGapMs} ms apart` : 'frames written whole'}; `
       + `${options.fresh ? 'fresh control id and timestamp on every send' : 'control ids and timestamps as in the source'}; `
-      + `${patientIdOverride === undefined ? 'patient ids as in the source' : `patient id ${JSON.stringify(patientIdOverride)}`}`)
+      + `${patientIdOverride === undefined ? 'patient ids as in the source' : `patient id ${JSON.stringify(patientIdOverride)}`}`
+      + (profile.randomize === undefined ? '' : `; ${randomOn ? `random values on (seed ${seed}; --seed ${seed} repeats them)` : 'random values off'}`))
 
     if (io.isTTY) {
       say('')

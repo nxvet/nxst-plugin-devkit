@@ -4,6 +4,8 @@ export type { RedactionRule, RedactionSpec, Redactor, Replacement, SegmentView }
 export { createRedactor, letteredLabel, numberedLabel, redactChunks, residualCheck, spreadsheetLetters } from './redact.ts'
 export type { FieldEdit, RewriteResult } from './edit.ts'
 export { rewriteFields, splitChunks, wrapFrame } from './edit.ts'
+export type { RandomPick, RandomRange, RandomValue, ResultValue } from './random.ts'
+export { createRandomValue, randomRange, rangePosition, seededRandom } from './random.ts'
 export type { Command, MessageState } from './repl.ts'
 export { describePatientIdOverride, describeState, formatHl7DateTime, formatTable, parseCommand, validatePatientId } from './repl.ts'
 export type { Io, Logger, LoggerOptions, ParsedCaptureArgs, ParsedSimulatorArgs } from './cli.ts'
