@@ -96,6 +96,74 @@ describe('rewriteFields', () => {
     assert.deepEqual(out.bytes, expectBytes(text, 'X001^GLU^DEMO||98', 'X001^GLU^DEMO||0'))
   })
 
+  describe('occurrence', () => {
+    const results = message({ obx: ['OBX|1|NM|X001^GLU^DEMO||98|mg/dL', 'OBX|2|NM|X002^BUN^DEMO||12|mg/dL', 'OBX|3|NM|X003^CRE^DEMO||1.1'] })
+    const resultBytes = Buffer.from(results, 'utf-8')
+
+    it('edits the second and third segment of a repeated name, and nothing else', () => {
+      const out = rewriteFields(resultBytes, [
+        { name: 'CRE', segment: 'OBX', occurrence: 3, field: 5, value: '0.9' },
+        { name: 'BUN', segment: 'OBX', occurrence: 2, field: 5, value: '15' },
+        { name: 'BUN unit', segment: 'OBX', occurrence: 2, field: 6, component: 1, value: 'mmol/L' },
+      ])
+
+      assert.deepEqual(out.bytes, Buffer.from(results
+        .replace('X002^BUN^DEMO||12|mg/dL', 'X002^BUN^DEMO||15|mmol/L')
+        .replace('X003^CRE^DEMO||1.1', 'X003^CRE^DEMO||0.9'), 'utf-8'))
+      assert.deepEqual(out.applied, ['CRE', 'BUN', 'BUN unit'])
+      assert.deepEqual(out.skipped, [])
+    })
+
+    it('treats occurrence 1 like no occurrence at all', () => {
+      const edit = { name: 'GLU', segment: 'OBX', field: 5, value: '101' }
+
+      assert.deepEqual(rewriteFields(resultBytes, [{ ...edit, occurrence: 1 }]), rewriteFields(resultBytes, [edit]))
+      assert.deepEqual(rewriteFields(resultBytes, [{ ...edit, occurrence: undefined }]), rewriteFields(resultBytes, [edit]))
+    })
+
+    it('skips, without synthesising, an occurrence the message does not have', () => {
+      const out = rewriteFields(resultBytes, [
+        { name: 'OBX #7', segment: 'OBX', occurrence: 7, field: 5, value: '1' },
+        { name: 'OBX #4', segment: 'OBX', occurrence: 4, field: 5, value: '1' },
+        { name: 'NTE #2', segment: 'NTE', occurrence: 2, field: 3, value: 'x' },
+      ])
+
+      assert.deepEqual(out.bytes, resultBytes)
+      assert.deepEqual(out.applied, [])
+      assert.deepEqual(out.skipped, [
+        { name: 'OBX #7', reason: 'no OBX segment #7 (the message has 3)' },
+        { name: 'OBX #4', reason: 'no OBX segment #4 (the message has 3)' },
+        { name: 'NTE #2', reason: 'no NTE segment' },
+      ])
+    })
+
+    it('names a later occurrence when its field, repetition or component is missing', () => {
+      const out = rewriteFields(resultBytes, [
+        { name: 'a', segment: 'OBX', occurrence: 3, field: 8, value: 'H' },
+        { name: 'b', segment: 'OBX', occurrence: 2, field: 5, repetition: 2, value: '1' },
+        { name: 'c', segment: 'OBX', occurrence: 2, field: 5, component: 2, value: '1' },
+        { name: 'd', segment: 'OBX', occurrence: 1, field: 8, value: 'H' },
+      ])
+
+      assert.deepEqual(out.skipped.map((entry) => entry.reason), [
+        'OBX #3 has fewer than 8 fields',
+        'OBX-5 of OBX #2 has no repetition 2',
+        'OBX-5 of OBX #2 has no component 2',
+        'OBX has fewer than 8 fields',
+      ])
+    })
+
+    it('throws a RangeError for an occurrence that is not a positive safe integer', () => {
+      for (const occurrence of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, 2 ** 53]) {
+        assert.throws(
+          () => rewriteFields(resultBytes, [{ name: 'GLU', segment: 'OBX', occurrence, field: 5, value: '1' }]),
+          { name: 'RangeError', message: `rewriteFields: the occurrence of "GLU" must be a positive safe integer, got ${occurrence}` },
+          `occurrence = ${occurrence}`,
+        )
+      }
+    })
+  })
+
   it('leaves a byte that is not valid UTF-8 elsewhere in the message untouched', () => {
     const weird = Buffer.concat([Buffer.from(message().replace('\r', '\r'), 'utf-8').subarray(0, -1), Buffer.from([0xff, 0x0d])])
     const out = rewriteFields(weird, [{ name: 'MSH-10', segment: 'MSH', field: 10, value: 'CTRL-7' }])
