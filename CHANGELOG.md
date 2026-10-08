@@ -5,7 +5,7 @@ All notable changes to `@nxvet/nxst-plugin-devkit` are recorded here. The packag
 `CaptureProfile`) and the command-line flags of `runSimulator` / `runCapture` are the public
 contract.
 
-## 1.2.0 — Unreleased
+## 1.2.0 — 2026-10-08
 
 ### Added
 
